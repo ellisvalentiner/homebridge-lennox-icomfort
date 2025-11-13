@@ -6,6 +6,8 @@
   "scripts": {
     "build": "tsc",
     "watch": "npm run build && npm link && nodemon",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
