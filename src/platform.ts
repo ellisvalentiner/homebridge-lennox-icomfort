@@ -133,7 +133,9 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
       this.log.info('Discovering Lennox iComfort systems...');
       let systems: LennoxSystem[];
       try {
-        systems = await this.client.getSystems();
+        // Get plant token for systems endpoint
+        const plantToken = await this.authManager.getPlantToken();
+        systems = await this.client.getSystems(plantToken);
       } catch (error) {
         this.log.error('Failed to discover systems:', error instanceof Error ? error.message : String(error));
         return;
@@ -239,7 +241,9 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
 
       let systems: LennoxSystem[];
       try {
-        systems = await this.client.getSystems();
+        // Get plant token for systems endpoint
+        const plantToken = await this.authManager.getPlantToken();
+        systems = await this.client.getSystems(plantToken);
       } catch (error) {
         this.log.error('Failed to fetch systems during polling:', error instanceof Error ? error.message : String(error));
         return;

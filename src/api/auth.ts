@@ -10,6 +10,7 @@ export interface TokenData {
   issueTime: number;
   certificateToken?: string;
   certificateTokenExpiry?: number;
+  plantToken?: string; // JWT token for plantdevices endpoints
 }
 
 export class AuthManager {
@@ -80,6 +81,23 @@ export class AuthManager {
       try {
         const response = await this.client.login(username, password, certificateToken);
         this.saveTokens(response);
+        
+        // Step 3: Register LCC owner to get plant token (JWT) for systems endpoint
+        try {
+          const userToken = response.ServerAssignedRoot.serverAssigned.security.userToken.encoded;
+          const registerResponse = await this.client.registerLCCOwner(username, userToken);
+          
+          // Store plant token
+          if (!this.tokenData) {
+            throw new Error('Token data not available after login');
+          }
+          this.tokenData.plantToken = registerResponse.token;
+          this.saveTokensToDisk();
+        } catch (registerError) {
+          // Don't fail login, but plant token is required for systems endpoint
+          // The error will be thrown when getPlantToken() is called
+          // This allows login to succeed even if registerLCCOwner fails temporarily
+        }
       } catch (loginError) {
         const errorMessage = loginError instanceof Error ? loginError.message : 'Unknown error';
         throw new Error(
@@ -111,6 +129,21 @@ export class AuthManager {
     }
 
     return this.tokenData.userToken;
+  }
+
+  /**
+   * Get plant token (JWT) for plantdevices endpoints
+   */
+  async getPlantToken(): Promise<string> {
+    if (!this.tokenData) {
+      throw new Error('Not authenticated. Please login first.');
+    }
+
+    if (!this.tokenData.plantToken) {
+      throw new Error('Plant token not available. Please re-login to obtain it.');
+    }
+
+    return this.tokenData.plantToken;
   }
 
   /**

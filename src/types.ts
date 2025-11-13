@@ -117,6 +117,10 @@ export interface LoginResponse {
   };
 }
 
+export interface RegisterLCCOwnerResponse {
+  token: string;
+}
+
 export interface Home {
   id: number;
   homeId: string;
@@ -184,6 +188,23 @@ export interface PublishMessage {
   MessageID: string;
   TargetID: string;
   Data: ScheduleCommand | ZoneHoldCommand;
+}
+
+export interface UserInfo {
+  id: number;
+  role: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string;
+  tel: string | null;
+  auth: null;
+  notifyAlertsToHomeowner: boolean;
+  notifyRemindersToHomeowner: boolean;
+  SubscribeMonthlyEmails: boolean;
+}
+
+export interface UserResponse {
+  users: UserInfo[];
 }
 
 

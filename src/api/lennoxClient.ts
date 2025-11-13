@@ -1,5 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
-import { LoginResponse, LennoxSystem, PublishCommandResponse, PublishMessage, CertificateAuthResponse } from '../types';
+import { LoginResponse, LennoxSystem, PublishCommandResponse, PublishMessage, CertificateAuthResponse, UserResponse, RegisterLCCOwnerResponse } from '../types';
 import { getCertificate } from './certificate';
 
 export class LennoxClient {
@@ -126,11 +126,12 @@ export class LennoxClient {
     // The body is form-encoded, so we need the correct Content-Type
     // Note: MITM log shows application/json, but that's likely a capture artifact
     // The server expects application/x-www-form-urlencoded for form data
+    // Authorization header must use lowercase "bearer" for login endpoint (matches MITM)
+    // Certificate token should already have prefix removed by auth.ts, but handle both cases
+    const tokenOnly = certificateToken.replace(/^(Bearer|bearer)\s+/i, '');
     const headers: Record<string, string> = {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'Authorization': certificateToken.startsWith('Bearer ') || certificateToken.startsWith('bearer ') 
-        ? certificateToken 
-        : `bearer ${certificateToken}`,
+      'Authorization': `bearer ${tokenOnly}`, // Always use lowercase "bearer" for login
     };
 
     try {
@@ -164,15 +165,124 @@ export class LennoxClient {
   }
 
   /**
-   * Get all systems for the authenticated user
+   * Get user information
+   * Requires user token in Authorization header (obtained via login).
+   * 
+   * Based on MITM capture, the request:
+   * - Uses Authorization header with lowercase "bearer" + user token
+   * - Returns user info including firstName, lastName, email, etc.
    */
-  async getSystems(): Promise<LennoxSystem[]> {
+  async getUser(): Promise<UserResponse> {
     try {
+      // Get current auth token from defaults (set via setAuthToken)
+      const currentAuth = this.api.defaults.headers.common['Authorization'] as string | undefined;
+      if (!currentAuth) {
+        throw new Error('User token is required. Call login() first to obtain it.');
+      }
+
+      // Ensure lowercase "bearer" for user endpoint (matches MITM)
+      // Extract token (remove any "Bearer" or "bearer" prefix)
+      const userToken = currentAuth.replace(/^(Bearer|bearer)\s+/i, '');
+      
+      const response = await this.api.get<UserResponse>(
+        `${this.baseURL}/v1/user`,
+        {
+          headers: {
+            'Authorization': `bearer ${userToken}`, // Lowercase "bearer" for user endpoint
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error: any) {
+      if (error.response) {
+        const status = error.response.status;
+        const statusText = error.response.statusText;
+        if (status === 401) {
+          throw new Error(`Authentication failed. Token may have expired. (${status} ${statusText})`);
+        }
+        throw new Error(`Failed to get user info: ${status} ${statusText}`);
+      }
+      throw new Error(`Failed to get user info: ${error.message}`);
+    }
+  }
+
+  /**
+   * Register LCC owner to obtain JWT token for plantdevices endpoints
+   * This must be called after login to get the token needed for /systems/ endpoint
+   * 
+   * Based on MITM capture, the request:
+   * - POST to /auth/registerLCCOwner
+   * - Body contains user email and user token
+   * - Returns JWT token in response
+   */
+  async registerLCCOwner(email: string, userToken: string): Promise<RegisterLCCOwnerResponse> {
+    try {
+      // Extract token (remove any "Bearer" or "bearer" prefix)
+      const tokenOnly = userToken.replace(/^(Bearer|bearer)\s+/i, '');
+      
+      const sessionId = Math.floor(Date.now() / 1000);
+      const response = await this.api.post<RegisterLCCOwnerResponse>(
+        `${this.plantBaseURL}/auth/registerLCCOwner`,
+        {
+          id: email,
+          token: `bearer ${tokenOnly}`, // User token with "bearer" prefix
+        },
+        {
+          headers: {
+            'Device-Mod': 'Node.js',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Content-Type': 'application/json',
+            'SessionID': sessionId.toString(),
+            'User-Agent': `Node-4.38.0022_PROD-${sessionId}-Node.js`,
+            'iOS-OS': '18.0',
+            'Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+            'App-Build': '4.38.0022_PROD',
+            'User': email,
+          },
+          timeout: 30000,
+        }
+      );
+
+      return response.data;
+    } catch (error: any) {
+      if (error.response) {
+        const status = error.response.status;
+        const statusText = error.response.statusText;
+        if (status === 401) {
+          throw new Error(`Registration failed: Authentication required (${status} ${statusText})`);
+        }
+        throw new Error(`Failed to register LCC owner: ${status} ${statusText}`);
+      }
+      throw new Error(`Failed to register LCC owner: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get all systems for the authenticated user
+   * Requires plant token (JWT) obtained via registerLCCOwner()
+   */
+  async getSystems(plantToken?: string): Promise<LennoxSystem[]> {
+    try {
+      // Use provided plant token or get from defaults
+      let token: string;
+      if (plantToken) {
+        token = plantToken;
+      } else {
+        const currentAuth = this.api.defaults.headers.common['Authorization'] as string | undefined;
+        if (!currentAuth) {
+          throw new Error('Plant token is required. Call registerLCCOwner() first to obtain it.');
+        }
+        // Extract token (remove any "Bearer" or "bearer" prefix)
+        token = currentAuth.replace(/^(Bearer|bearer)\s+/i, '');
+      }
+      
       const sessionId = Math.floor(Date.now() / 1000);
       const response = await this.api.get<LennoxSystem[]>(
         `${this.plantBaseURL}/systems/`,
         {
           headers: {
+            'Authorization': `Bearer ${token}`, // Capital "Bearer" for systems endpoint, JWT token
             'Device-Mod': 'Node.js',
             'Accept-Language': 'en-US,en;q=0.9',
             'Content-Type': 'application/json',
