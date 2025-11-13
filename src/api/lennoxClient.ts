@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
-import { LoginResponse, LennoxSystem, PublishCommandResponse, PublishMessage } from '../types';
+import { LoginResponse, LennoxSystem, PublishCommandResponse, PublishMessage, CertificateAuthResponse } from '../types';
+import { getCertificate } from './certificate';
 
 export class LennoxClient {
   private api: AxiosInstance;
@@ -32,10 +33,73 @@ export class LennoxClient {
   }
 
   /**
+   * Authenticate using certificate to obtain certificate token
+   * This is the first step in the authentication flow.
+   * 
+   * The certificate is a base64-encoded certificate that appears in the request body.
+   * Based on the network capture, this is sent as a raw string (not JSON).
+   */
+  async authenticate(certificate?: string): Promise<CertificateAuthResponse> {
+    try {
+      // Get certificate from parameter or certificate utility
+      const cert = certificate || getCertificate();
+      
+      if (!cert) {
+        throw new Error(
+          'Certificate is required for authentication. ' +
+          'Please extract the certificate from the network capture or provide it via configuration.'
+        );
+      }
+
+      // The certificate authentication endpoint expects the certificate as the request body
+      // Based on the network capture, it's sent as a raw string, not JSON
+      // Note: The Content-Type may need to be adjusted based on actual API requirements
+      const response = await this.api.post<CertificateAuthResponse>(
+        `${this.baseURL}/v1/mobile/authenticate`,
+        cert,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          transformRequest: [(data) => data], // Send as-is, don't JSON.stringify
+        }
+      );
+
+      return response.data;
+    } catch (error: any) {
+      if (error.response) {
+        const status = error.response.status;
+        const statusText = error.response.statusText;
+        const data = error.response.data;
+        
+        if (status === 401 || status === 400) {
+          throw new Error(
+            `Certificate authentication failed: ${status} ${statusText}. ` +
+            `A valid certificate is required. The certificate may need to be extracted from the Lennox mobile app ` +
+            `or from the network capture (request-response-payloads.txt line 17).`
+          );
+        }
+        
+        throw new Error(`Certificate authentication failed: ${status} ${statusText}${data ? ` - ${JSON.stringify(data)}` : ''}`);
+      }
+      throw new Error(`Certificate authentication failed: ${error.message}`);
+    }
+  }
+
+  /**
    * Login with username and password
-   * Note: This may require a certificate token first. If login fails, certificate auth may be needed.
+   * Requires a certificate token in the Authorization header (obtained via authenticate() first).
+   * 
+   * Based on MITM capture, the request:
+   * - Uses Authorization header with bearer certificate token
+   * - Sends URL-encoded form data in the body
+   * - Content-Type header says application/json (but body is form-encoded - matching app behavior)
    */
   async login(username: string, password: string, certificateToken?: string): Promise<LoginResponse> {
+    if (!certificateToken) {
+      throw new Error('Certificate token is required for login. Call authenticate() first to obtain it.');
+    }
+
     const loginData = new URLSearchParams({
       username,
       password,
@@ -43,14 +107,15 @@ export class LennoxClient {
       applicationid: `mapp${Date.now()}_${username}`,
     });
 
+    // The body is form-encoded, so we need the correct Content-Type
+    // Note: MITM log shows application/json, but that's likely a capture artifact
+    // The server expects application/x-www-form-urlencoded for form data
     const headers: Record<string, string> = {
       'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': certificateToken.startsWith('Bearer ') || certificateToken.startsWith('bearer ') 
+        ? certificateToken 
+        : `bearer ${certificateToken}`,
     };
-
-    // Add certificate token if provided
-    if (certificateToken) {
-      headers['Authorization'] = certificateToken.startsWith('Bearer ') ? certificateToken : `Bearer ${certificateToken}`;
-    }
 
     try {
       const response = await this.api.post<LoginResponse>(
@@ -66,9 +131,12 @@ export class LennoxClient {
         const statusText = error.response.statusText;
         const data = error.response.data;
         
-        // If 401, might need certificate token
+        // If 401, certificate token may be invalid or expired
         if (status === 401) {
-          throw new Error(`Login failed: Authentication required. Certificate token may be needed. (${status} ${statusText})`);
+          throw new Error(
+            `Login failed: Authentication required (${status} ${statusText}). ` +
+            `The certificate token may be invalid or expired. Try re-authenticating.`
+          );
         }
         
         throw new Error(`Login failed: ${status} ${statusText}${data ? ` - ${JSON.stringify(data)}` : ''}`);

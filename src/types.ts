@@ -79,6 +79,25 @@ export interface UserData {
   fanMode?: 'auto' | 'on' | 'circulate';
 }
 
+export interface CertificateAuthResponse {
+  serverAssigned: {
+    identities: null;
+    urls: null;
+    security: {
+      certificateToken: {
+        type: string;
+        issueTime: number;
+        expiryTime: number;
+        encoded: string;
+        refreshToken: null;
+      };
+      lccToken: null;
+      userToken: null;
+      doNotPersist: boolean;
+    };
+  };
+}
+
 export interface LoginResponse {
   readyHomes: {
     homes: Home[];

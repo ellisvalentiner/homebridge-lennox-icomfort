@@ -30,7 +30,27 @@ Homebridge plugin for Lennox iComfort thermostats. This plugin allows you to con
    npm link
    ```
 
-3. Configure the plugin in Homebridge UI or `config.json`:
+3. **Extract the certificate** (required for authentication):
+
+   The plugin requires a certificate extracted from the Lennox mobile app. You'll need to:
+
+   a. Set up a MITM proxy (e.g., mitmproxy, Charles Proxy, or Proxyman)
+   b. Configure your device to use the proxy
+   c. Log out and log back into the Lennox mobile app
+   d. Capture the network traffic and find the request to `/v1/mobile/authenticate`
+   e. Extract the certificate from the request body (it's a long base64-encoded string)
+
+   See [CERTIFICATE_EXTRACTION.md](CERTIFICATE_EXTRACTION.md) for detailed instructions.
+
+4. Set the certificate as an environment variable:
+
+   ```bash
+   export LENNOX_CERTIFICATE="your-extracted-certificate-here"
+   ```
+
+   Or add it to your Homebridge environment (e.g., in systemd service file or `.env` file).
+
+5. Configure the plugin in Homebridge UI or `config.json`:
 
    ```json
    {
@@ -75,7 +95,7 @@ Homebridge plugin for Lennox iComfort thermostats. This plugin allows you to con
 
 - Currently supports only the primary zone of each system
 - Multi-zone support may be added in future versions
-- Certificate-based authentication may be required in some cases (currently using simplified username/password approach)
+- Certificate extraction required for authentication (see [CERTIFICATE_EXTRACTION.md](CERTIFICATE_EXTRACTION.md))
 
 ## Troubleshooting
 
@@ -83,9 +103,10 @@ Homebridge plugin for Lennox iComfort thermostats. This plugin allows you to con
 
 If you encounter authentication errors:
 
-1. Verify your username and password are correct
-2. Check that your account has access to the iComfort system
-3. Some accounts may require certificate-based authentication (not yet implemented)
+1. Verify `LENNOX_CERTIFICATE` environment variable is set
+2. Verify your username and password are correct
+3. Check that your account has access to the iComfort system
+4. Try extracting a fresh certificate if authentication fails (see [CERTIFICATE_EXTRACTION.md](CERTIFICATE_EXTRACTION.md))
 
 ### System Not Appearing
 

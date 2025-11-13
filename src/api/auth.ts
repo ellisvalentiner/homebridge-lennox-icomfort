@@ -8,6 +8,8 @@ export interface TokenData {
   refreshToken: string;
   expiryTime: number;
   issueTime: number;
+  certificateToken?: string;
+  certificateTokenExpiry?: number;
 }
 
 export class AuthManager {
@@ -23,12 +25,64 @@ export class AuthManager {
 
   /**
    * Login with username and password
+   * This performs a two-step authentication:
+   * 1. First obtains a certificate token via certificate authentication
+   * 2. Then uses the certificate token to login with username/password
    */
   async login(username: string, password: string): Promise<void> {
     try {
-      const response = await this.client.login(username, password);
-      this.saveTokens(response);
+      // Step 1: Get certificate token (if needed or expired)
+      let certificateToken: string | undefined;
+      
+      if (!this.tokenData?.certificateToken || this.isCertificateTokenExpired()) {
+        try {
+          // Get certificate token via certificate authentication
+          // This must be done before username/password login
+          const certAuthResponse = await this.client.authenticate();
+          const certToken = certAuthResponse.serverAssigned.security.certificateToken;
+          
+          // Extract the token (remove 'bearer ' prefix if present)
+          certificateToken = certToken.encoded.replace(/^bearer\s+/i, '');
+          
+          // Store certificate token
+          if (!this.tokenData) {
+            this.tokenData = {
+              userToken: '',
+              refreshToken: '',
+              expiryTime: 0,
+              issueTime: 0,
+            };
+          }
+          this.tokenData.certificateToken = certificateToken;
+          this.tokenData.certificateTokenExpiry = certToken.expiryTime;
+          this.saveTokensToDisk();
+        } catch (certError) {
+          const errorMessage = certError instanceof Error ? certError.message : 'Unknown error';
+          throw new Error(
+            `Certificate authentication failed: ${errorMessage}. ` +
+            `This is the first step of authentication. Please check if the certificate is valid and not expired.`
+          );
+        }
+      } else {
+        certificateToken = this.tokenData.certificateToken;
+      }
+
+      // Step 2: Login with username/password using certificate token
+      try {
+        const response = await this.client.login(username, password, certificateToken);
+        this.saveTokens(response);
+      } catch (loginError) {
+        const errorMessage = loginError instanceof Error ? loginError.message : 'Unknown error';
+        throw new Error(
+          `User login failed: ${errorMessage}. ` +
+          `Please verify your username and password are correct.`
+        );
+      }
     } catch (error) {
+      // Re-throw if already formatted, otherwise wrap
+      if (error instanceof Error && (error.message.includes('Certificate authentication failed') || error.message.includes('User login failed'))) {
+        throw error;
+      }
       throw new Error(`Login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -75,12 +129,29 @@ export class AuthManager {
   private saveTokens(loginResponse: LoginResponse): void {
     const token = loginResponse.ServerAssignedRoot.serverAssigned.security.userToken;
     
+    // Preserve certificate token if it exists
+    const existingCertToken = this.tokenData?.certificateToken;
+    const existingCertTokenExpiry = this.tokenData?.certificateTokenExpiry;
+    
     this.tokenData = {
       userToken: token.encoded.replace(/^bearer\s+/i, ''),
       refreshToken: token.refreshToken.replace(/^bearer\s+/i, ''),
       expiryTime: token.expiryTime,
       issueTime: token.issueTime,
+      certificateToken: existingCertToken,
+      certificateTokenExpiry: existingCertTokenExpiry,
     };
+
+    this.saveTokensToDisk();
+  }
+
+  /**
+   * Save tokens to disk (internal helper)
+   */
+  private saveTokensToDisk(): void {
+    if (!this.tokenData) {
+      return;
+    }
 
     const tokenFile = path.join(this.storagePath, 'tokens.json');
     try {
@@ -89,6 +160,19 @@ export class AuthManager {
     } catch (error) {
       throw new Error(`Failed to save tokens: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Check if certificate token is expired
+   */
+  private isCertificateTokenExpired(): boolean {
+    if (!this.tokenData?.certificateTokenExpiry) {
+      return true;
+    }
+    
+    // Check if token is expired or will expire in the next 5 minutes
+    const now = Date.now() / 1000;
+    return this.tokenData.certificateTokenExpiry - now < 300;
   }
 
   /**

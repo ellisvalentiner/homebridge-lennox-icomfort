@@ -565,7 +565,7 @@ export class LennoxiComfortAccessory {
           ? this.fahrenheitToCelsius(parseFloat(userData.csp) || 0)
           : parseFloat(userData.cspC) || 0;
         break;
-      case 3: // Auto - use average of setpoints
+      case 3: { // Auto - use average of setpoints
         const hsp = isFahrenheit
           ? this.fahrenheitToCelsius(parseFloat(userData.hsp) || 0)
           : parseFloat(userData.hspC) || 0;
@@ -574,6 +574,7 @@ export class LennoxiComfortAccessory {
           : parseFloat(userData.cspC) || 0;
         this.targetTemperature = (hsp + csp) / 2;
         break;
+      }
       default:
         this.targetTemperature = this.currentTemperature;
     }

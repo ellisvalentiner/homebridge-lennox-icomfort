@@ -8,6 +8,8 @@
     "watch": "npm run build && npm link && nodemon",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
+    "format:md": "prettier --write \"*.md\"",
+    "format:md:check": "prettier --check \"*.md\"",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
