@@ -1,0 +1,55 @@
+{
+  "pluginAlias": "LennoxiComfort",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Lennox iComfort Thermostat",
+  "footerDisplay": "For documentation and issues, visit: https://github.com/ellisvalentiner/homebridge-lennox-icomfort",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Platform Name",
+        "type": "string",
+        "required": true,
+        "default": "LennoxiComfort",
+        "description": "Name of the platform as it appears in Homebridge"
+      },
+      "username": {
+        "title": "Username",
+        "type": "string",
+        "required": true,
+        "description": "Your Lennox iComfort account email address"
+      },
+      "password": {
+        "title": "Password",
+        "type": "string",
+        "required": true,
+        "format": "password",
+        "description": "Your Lennox iComfort account password"
+      },
+      "pollingInterval": {
+        "title": "Polling Interval (seconds)",
+        "type": "integer",
+        "required": false,
+        "default": 60,
+        "minimum": 30,
+        "maximum": 300,
+        "description": "How often to poll for status updates (30-300 seconds)"
+      },
+      "temperatureUnit": {
+        "title": "Temperature Unit",
+        "type": "string",
+        "required": false,
+        "default": "auto",
+        "enum": [
+          "auto",
+          "F",
+          "C"
+        ],
+        "description": "Temperature display unit (auto uses system preference)"
+      }
+    }
+  }
+}
+
+
