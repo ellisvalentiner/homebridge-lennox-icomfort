@@ -1,0 +1,56 @@
+# GitHub Release Configuration
+# Settings for automated releases
+
+changelog:
+  # Generate changelog from PRs
+  enabled: true
+  
+  # Categories for organizing changelog entries
+  categories:
+    - title: '🚀 Features'
+      labels:
+        - 'enhancement'
+        - 'feature'
+    - title: '🐛 Bug Fixes'
+      labels:
+        - 'bug'
+        - 'fix'
+    - title: '📚 Documentation'
+      labels:
+        - 'documentation'
+        - 'docs'
+    - title: '♻️ Refactoring'
+      labels:
+        - 'refactor'
+    - title: '⚡ Performance'
+      labels:
+        - 'performance'
+    - title: '🔧 Maintenance'
+      labels:
+        - 'maintenance'
+        - 'chore'
+
+# Release branch (trunk-based development)
+branches:
+  - main
+
+# Version bumping
+version:
+  # Auto-increment version on release
+  auto_increment: true
+  
+  # Version file paths to update
+  files:
+    - 'VERSION'
+    - 'version.txt'
+    - 'internal/version/version.go'
+
+# Pre-release checks
+checks:
+  - name: 'All tests pass'
+    required: true
+  - name: 'No merge conflicts'
+    required: true
+  - name: 'Linked Jira tickets'
+    required: false
+

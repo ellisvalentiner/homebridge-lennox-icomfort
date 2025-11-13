@@ -1,0 +1,53 @@
+name: Mark Stale Issues and PRs
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  stale:
+    name: Mark Stale
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Mark stale issues and PRs
+        uses: actions/stale@v9
+        # See: https://github.com/actions/stale
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          
+          # Stale issue configuration
+          stale-issue-message: 'This issue has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs within 7 days. Thank you for your contributions.'
+          close-issue-message: 'This issue was automatically closed due to inactivity. If you believe this was done in error, please reopen the issue.'
+          stale-issue-label: 'stale'
+          days-before-issue-stale: 60
+          days-before-issue-close: 7
+          
+          # Stale PR configuration
+          stale-pr-message: 'This pull request has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs within 7 days. Thank you for your contributions.'
+          close-pr-message: 'This pull request was automatically closed due to inactivity. If you believe this was done in error, please reopen the PR.'
+          stale-pr-label: 'stale'
+          days-before-pr-stale: 30
+          days-before-pr-close: 7
+          
+          # Exemptions
+          exempt-issue-labels: 'pinned,security,bug'
+          exempt-pr-labels: 'pinned,security,work-in-progress'
+          exempt-all-issue-milestones: false
+          exempt-all-pr-milestones: false
+          exempt-issue-assignees: true
+          exempt-pr-assignees: true
+          
+          # Operations
+          operations-per-run: 30
+          remove-stale-when-updated: true
+          ascending: true
+
