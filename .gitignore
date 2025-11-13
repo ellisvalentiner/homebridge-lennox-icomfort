@@ -7,4 +7,7 @@ dist
 # Test storage
 test-storage/
 
+# Certificate value file (contains sensitive data)
+certificate-value.txt
+
 

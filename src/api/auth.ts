@@ -41,6 +41,10 @@ export class AuthManager {
           const certAuthResponse = await this.client.authenticate();
           const certToken = certAuthResponse.serverAssigned.security.certificateToken;
           
+          if (!certToken || !certToken.encoded) {
+            throw new Error('Certificate authentication response missing token');
+          }
+          
           // Extract the token (remove 'bearer ' prefix if present)
           certificateToken = certToken.encoded.replace(/^bearer\s+/i, '');
           
@@ -60,11 +64,16 @@ export class AuthManager {
           const errorMessage = certError instanceof Error ? certError.message : 'Unknown error';
           throw new Error(
             `Certificate authentication failed: ${errorMessage}. ` +
-            `This is the first step of authentication. Please check if the certificate is valid and not expired.`
+            `This is the first step of authentication. Please check if the certificate is valid and not expired. ` +
+            `Verify that LENNOX_CERTIFICATE environment variable is set correctly.`
           );
         }
       } else {
         certificateToken = this.tokenData.certificateToken;
+      }
+
+      if (!certificateToken) {
+        throw new Error('Certificate token is missing after authentication');
       }
 
       // Step 2: Login with username/password using certificate token

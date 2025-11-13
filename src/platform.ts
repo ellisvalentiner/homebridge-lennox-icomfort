@@ -88,14 +88,26 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
     }
 
     try {
+      // Check if certificate is available
+      if (!process.env.LENNOX_CERTIFICATE) {
+        this.log.error('LENNOX_CERTIFICATE environment variable is not set.');
+        this.log.error('Please set the LENNOX_CERTIFICATE environment variable with the certificate from request-response-payloads.txt line 17.');
+        this.log.error('See HOMEBRIDGE_SETUP.md for instructions on how to set environment variables.');
+        return;
+      }
+
       // Authenticate
       if (!this.authManager.isAuthenticated()) {
         this.log.info('Authenticating with Lennox iComfort...');
         try {
           await this.authManager.login(this.config.username as string, this.config.password as string);
+          this.log.info('Authentication successful');
         } catch (error) {
           this.log.error('Authentication failed:', error instanceof Error ? error.message : String(error));
-          this.log.error('Please check your username and password in the configuration');
+          this.log.error('Please check:');
+          this.log.error('  1. LENNOX_CERTIFICATE environment variable is set correctly');
+          this.log.error('  2. Username and password in the configuration are correct');
+          this.log.error('  3. Certificate is not expired (extract a fresh one if needed)');
           return;
         }
       }

@@ -47,7 +47,16 @@ export class LennoxClient {
       if (!cert) {
         throw new Error(
           'Certificate is required for authentication. ' +
-          'Please extract the certificate from the network capture or provide it via configuration.'
+          'Please extract the certificate from the network capture or provide it via configuration. ' +
+          'Set the LENNOX_CERTIFICATE environment variable.'
+        );
+      }
+
+      // Validate certificate format (should start with MII and be base64)
+      if (!cert.startsWith('MII')) {
+        throw new Error(
+          'Certificate format appears invalid. Certificate should start with "MII" and be a base64-encoded string. ' +
+          'Please verify you copied the entire certificate from request-response-payloads.txt line 17.'
         );
       }
 
@@ -65,6 +74,11 @@ export class LennoxClient {
         }
       );
 
+      // Validate response
+      if (!response.data?.serverAssigned?.security?.certificateToken) {
+        throw new Error('Certificate authentication response missing certificate token');
+      }
+
       return response.data;
     } catch (error: any) {
       if (error.response) {
@@ -76,7 +90,9 @@ export class LennoxClient {
           throw new Error(
             `Certificate authentication failed: ${status} ${statusText}. ` +
             `A valid certificate is required. The certificate may need to be extracted from the Lennox mobile app ` +
-            `or from the network capture (request-response-payloads.txt line 17).`
+            `or from the network capture (request-response-payloads.txt line 17). ` +
+            `Verify that LENNOX_CERTIFICATE environment variable is set correctly.` +
+            (data ? ` Response: ${JSON.stringify(data)}` : '')
           );
         }
         
@@ -135,7 +151,9 @@ export class LennoxClient {
         if (status === 401) {
           throw new Error(
             `Login failed: Authentication required (${status} ${statusText}). ` +
-            `The certificate token may be invalid or expired. Try re-authenticating.`
+            `The certificate token may be invalid or expired. Try re-authenticating. ` +
+            `Also verify your username and password are correct.` +
+            (data ? ` Response: ${JSON.stringify(data)}` : '')
           );
         }
         
