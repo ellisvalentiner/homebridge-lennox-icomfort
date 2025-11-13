@@ -106,8 +106,8 @@ export class LennoxiComfortAccessory {
         .onSet(this.setFanRotationSpeed.bind(this));
     }
 
-    // Store handler reference for polling
-    this.accessory.context.handler = this;
+    // Note: Handler reference is stored in platform.accessoryHandlers Map
+    // (not in context to avoid circular references when saving to disk)
 
     // Update initial status (fire and forget - polling will handle regular updates)
     this.updateStatus(system).catch(error => {

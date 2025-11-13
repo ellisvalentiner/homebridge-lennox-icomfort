@@ -30,6 +30,7 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
   private authManager: AuthManager;
   private pollingInterval?: NodeJS.Timeout;
   private storagePath: string;
+  private accessoryHandlers: Map<string, LennoxiComfortAccessory> = new Map();
 
   constructor(
     public readonly log: Logger,
@@ -62,6 +63,8 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
         clearInterval(this.pollingInterval);
         this.pollingInterval = undefined;
       }
+      // Clear handler references
+      this.accessoryHandlers.clear();
     });
   }
 
@@ -171,7 +174,9 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
     if (existingAccessory) {
       // The accessory already exists
       this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
-      new LennoxiComfortAccessory(this, existingAccessory, system);
+      const handler = new LennoxiComfortAccessory(this, existingAccessory, system);
+      // Store handler reference in Map (not in context to avoid circular references)
+      this.accessoryHandlers.set(uuid, handler);
     } else {
       // The accessory does not yet exist, so we need to create it
       this.log.info('Adding new accessory:', system.extId);
@@ -183,10 +188,13 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
       );
 
       // Store a copy of the device object in the `accessory.context`
+      // Only store serializable data, not handler instances
       accessory.context.system = system;
 
       // Create the accessory handler
-      new LennoxiComfortAccessory(this, accessory, system);
+      const handler = new LennoxiComfortAccessory(this, accessory, system);
+      // Store handler reference in Map (not in context to avoid circular references)
+      this.accessoryHandlers.set(uuid, handler);
 
       // Link the accessory to your platform
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
@@ -251,16 +259,13 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
 
       for (const system of systems) {
         const uuid = this.api.hap.uuid.generate(system.extId);
-        const accessory = this.accessories.find(acc => acc.UUID === uuid);
+        const handler = this.accessoryHandlers.get(uuid);
 
-        if (accessory) {
-          const handler = accessory.context.handler as LennoxiComfortAccessory;
-          if (handler) {
-            try {
-              await handler.updateStatus(system);
-            } catch (error) {
-              this.log.warn(`Error updating status for system ${system.extId}:`, error instanceof Error ? error.message : String(error));
-            }
+        if (handler) {
+          try {
+            await handler.updateStatus(system);
+          } catch (error) {
+            this.log.warn(`Error updating status for system ${system.extId}:`, error instanceof Error ? error.message : String(error));
           }
         }
       }
