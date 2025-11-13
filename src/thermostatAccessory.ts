@@ -1,9 +1,6 @@
 import {
-  API,
-  Logging,
   PlatformAccessory,
   Service,
-  Characteristic,
   CharacteristicValue,
 } from 'homebridge';
 
@@ -273,19 +270,20 @@ export class LennoxiComfortAccessory {
     const targetTemp = isFahrenheit ? this.celsiusToFahrenheit(this.targetTemperature) : this.targetTemperature;
 
       // Determine which setpoint to update based on current mode
+      const systemMode = this.mapOpModeToSystemMode(userData.opMode);
       if (this.targetHeatingCoolingState === 1) {
         // Heat mode - update heating setpoint
-        await this.updateSetpoints(targetTemp, userData.csp, userData.opMode, userData.fanMode);
+        await this.updateSetpoints(targetTemp, userData.csp, systemMode, userData.fanMode);
       } else if (this.targetHeatingCoolingState === 2) {
         // Cool mode - update cooling setpoint
-        await this.updateSetpoints(userData.hsp, targetTemp, userData.opMode, userData.fanMode);
+        await this.updateSetpoints(userData.hsp, targetTemp, systemMode, userData.fanMode);
       } else if (this.targetHeatingCoolingState === 3) {
         // Auto mode - update both setpoints (maintain a reasonable gap)
         const gap = isFahrenheit ? 3 : 1.5; // 3°F or 1.5°C gap
         await this.updateSetpoints(
           targetTemp - gap,
           targetTemp + gap,
-          userData.opMode,
+          systemMode,
           userData.fanMode,
         );
       }
@@ -307,7 +305,6 @@ export class LennoxiComfortAccessory {
       }
 
     const userData = zoneData.userData;
-    const isFahrenheit = userData.dispUnits === 'F';
 
     let systemMode: 'heat and cool' | 'heat' | 'cool' | 'off';
     switch (this.targetHeatingCoolingState) {
@@ -354,10 +351,11 @@ export class LennoxiComfortAccessory {
     const isFahrenheit = userData.dispUnits === 'F';
     const csp = isFahrenheit ? this.celsiusToFahrenheit(this.coolingThresholdTemperature) : this.coolingThresholdTemperature;
 
+    const systemMode = this.mapOpModeToSystemMode(userData.opMode);
     await this.updateSetpoints(
       userData.hsp,
       csp.toString(),
-      userData.opMode,
+      systemMode,
       userData.fanMode,
     );
     } catch (error) {
@@ -381,10 +379,11 @@ export class LennoxiComfortAccessory {
     const isFahrenheit = userData.dispUnits === 'F';
     const hsp = isFahrenheit ? this.celsiusToFahrenheit(this.heatingThresholdTemperature) : this.heatingThresholdTemperature;
 
+    const systemMode = this.mapOpModeToSystemMode(userData.opMode);
     await this.updateSetpoints(
       hsp.toString(),
       userData.csp,
-      userData.opMode,
+      systemMode,
       userData.fanMode,
     );
     } catch (error) {
@@ -473,9 +472,9 @@ export class LennoxiComfortAccessory {
                   id: 0,
                   period: {
                     hsp: Math.round(hspF),
-                    hspC: hspC.toFixed(1),
+                    hspC: parseFloat(hspC.toFixed(1)),
                     csp: Math.round(cspF),
-                    cspC: cspC.toFixed(1),
+                    cspC: parseFloat(cspC.toFixed(1)),
                     systemMode,
                     startTime: 291600, // Default start time (8:06 AM in seconds)
                     fanMode: fanMode || userData.fanMode || 'auto',
@@ -545,7 +544,8 @@ export class LennoxiComfortAccessory {
     }
 
     const userData = zoneData.userData;
-    await this.updateSetpoints(userData.hsp, userData.csp, userData.opMode, fanMode);
+    const systemMode = this.mapOpModeToSystemMode(userData.opMode);
+    await this.updateSetpoints(userData.hsp, userData.csp, systemMode, fanMode);
   }
 
   /**
@@ -576,6 +576,24 @@ export class LennoxiComfortAccessory {
         break;
       default:
         this.targetTemperature = this.currentTemperature;
+    }
+  }
+
+  /**
+   * Map opMode to system mode for API calls
+   */
+  private mapOpModeToSystemMode(opMode: 'hc' | 'heat' | 'cool' | 'off'): 'heat and cool' | 'heat' | 'cool' | 'off' {
+    switch (opMode) {
+      case 'hc':
+        return 'heat and cool';
+      case 'heat':
+        return 'heat';
+      case 'cool':
+        return 'cool';
+      case 'off':
+        return 'off';
+      default:
+        return 'off';
     }
   }
 
