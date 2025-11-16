@@ -175,7 +175,7 @@ export interface ZoneHoldCommand {
         exceptionType: 'hold';
         enabled: boolean;
         expiresOn: string;
-        expirationMode: 'timed' | 'manual';
+        expirationMode: 'nextPeriod' | 'timed' | 'manual';
       };
     };
     id: number;
