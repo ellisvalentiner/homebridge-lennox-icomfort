@@ -27,7 +27,7 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
   public readonly accessories: PlatformAccessory[] = [];
 
   public client: LennoxClient;
-  private authManager: AuthManager;
+  public authManager: AuthManager; // Made public for accessory use
   private pollingInterval?: NodeJS.Timeout;
   private storagePath: string;
   private accessoryHandlers: Map<string, LennoxiComfortAccessory> = new Map();

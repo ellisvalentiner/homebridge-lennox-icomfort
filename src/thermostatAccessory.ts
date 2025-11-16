@@ -270,11 +270,26 @@ export class LennoxiComfortAccessory {
   async setTargetTemperature(value: CharacteristicValue): Promise<void> {
     try {
       this.targetTemperature = value as number;
-      this.platform.log.debug(`Set Target Temperature: ${this.targetTemperature}°C`);
+      this.platform.log.info(`[CONTROL] HomeKit requested setTargetTemperature: ${this.targetTemperature}°C`);
 
-      const zoneData = this.platform.getPrimaryZoneData(this.system);
+      // Refresh system data to ensure we have the latest state
+      // This ensures we're working with current setpoints and mode
+      let currentSystem = this.system;
+      try {
+        const plantToken = await this.platform.authManager.getPlantToken();
+        const systems = await this.platform.client.getSystems(plantToken);
+        const updatedSystem = systems.find(s => s.extId === this.systemId);
+        if (updatedSystem) {
+          currentSystem = updatedSystem;
+          this.platform.log.debug(`[CONTROL] Refreshed system data before update`);
+        }
+      } catch (error) {
+        this.platform.log.warn(`[CONTROL] Could not refresh system data, using cached:`, error instanceof Error ? error.message : String(error));
+      }
+
+      const zoneData = this.platform.getPrimaryZoneData(currentSystem);
       if (!zoneData) {
-        this.platform.log.error('No zone data available');
+        this.platform.log.error('[CONTROL] No zone data available');
         return;
       }
 
@@ -286,10 +301,10 @@ export class LennoxiComfortAccessory {
       const systemMode = this.mapOpModeToSystemMode(userData.opMode);
       if (this.targetHeatingCoolingState === 1) {
         // Heat mode - update heating setpoint
-        await this.updateSetpoints(targetTemp, userData.csp, systemMode, userData.fanMode);
+        await this.updateSetpoints(targetTemp, userData.csp, systemMode, userData.fanMode, currentSystem);
       } else if (this.targetHeatingCoolingState === 2) {
         // Cool mode - update cooling setpoint
-        await this.updateSetpoints(userData.hsp, targetTemp, systemMode, userData.fanMode);
+        await this.updateSetpoints(userData.hsp, targetTemp, systemMode, userData.fanMode, currentSystem);
       } else if (this.targetHeatingCoolingState === 3) {
         // Auto mode - update both setpoints (maintain a reasonable gap)
         const gap = isFahrenheit ? 3 : 1.5; // 3°F or 1.5°C gap
@@ -298,6 +313,7 @@ export class LennoxiComfortAccessory {
           targetTemp + gap,
           systemMode,
           userData.fanMode,
+          currentSystem,
         );
       }
     } catch (error) {
@@ -456,15 +472,38 @@ export class LennoxiComfortAccessory {
     csp: string | number,
     systemMode: 'heat and cool' | 'heat' | 'cool' | 'off',
     fanMode?: 'auto' | 'on' | 'circulate',
+    system?: LennoxSystem, // Optional system parameter to use fresh data
   ): Promise<void> {
+    this.platform.log.info(`[CONTROL] Starting setpoint update: hsp=${hsp}, csp=${csp}, mode=${systemMode}, fanMode=${fanMode || 'auto'}`);
+    
     try {
-      const zoneData = this.platform.getPrimaryZoneData(this.system);
+      // Use provided system or fall back to cached system
+      const systemToUse = system || this.system;
+      const zoneData = this.platform.getPrimaryZoneData(systemToUse);
       if (!zoneData) {
+        this.platform.log.error('[CONTROL] No zone data available - cannot update setpoints');
         throw new Error('No zone data available');
       }
 
       const userData = zoneData.userData;
+      const subStatus = zoneData.subStatus;
       const isFahrenheit = userData.dispUnits === 'F';
+      
+      // Extract zone ID from userData.id or subStatus
+      // The zone ID appears to be in userData.id, but we need to parse it
+      // Based on MITM, zone ID 0 is used for primary zone
+      let zoneId = 0;
+      try {
+        // Try to extract zone ID from userData.id if it's numeric
+        const parsedId = parseInt(userData.id, 10);
+        if (!isNaN(parsedId)) {
+          zoneId = parsedId;
+        }
+      } catch (e) {
+        // Keep default zone ID 0
+      }
+      
+      this.platform.log.debug(`[CONTROL] Using zone ID: ${zoneId}, schedule ID: ${this.scheduleId}`);
 
       // Convert to appropriate units
       const hspValue = typeof hsp === 'number' ? hsp : parseFloat(hsp);
@@ -477,25 +516,32 @@ export class LennoxiComfortAccessory {
 
       // Calculate setpoint (sp/spC) - average of heating and cooling setpoints for auto mode
       // For single mode, use the appropriate setpoint
+      // Note: sp should be integer (rounded), spC should be float with 1 decimal
       const spF = systemMode === 'heat and cool' ? Math.round((hspF + cspF) / 2) : (systemMode === 'heat' ? Math.round(hspF) : Math.round(cspF));
       const spC = systemMode === 'heat and cool' ? parseFloat(((hspC + cspC) / 2).toFixed(1)) : (systemMode === 'heat' ? parseFloat(hspC.toFixed(1)) : parseFloat(cspC.toFixed(1)));
 
-      // Extract humidity settings from userData if available
+      // Extract humidity settings - try to preserve current values if available
       // Based on MITM capture, these values are typically:
       // husp: 30-40 (humidity setpoint)
       // desp: 55 (dehumidification setpoint)
       // humidityMode: "off" or "humidify"
-      const husp = 40; // Default humidity setpoint
-      const desp = 55; // Default dehumidification setpoint
-      const humidityMode = 'off'; // Default to off, could be "humidify" if system supports it
+      // Note: MITM shows "humidify" but we don't have this in userData, so we'll use defaults
+      // The actual values should be preserved from current schedule if we had access to it
+      const husp = 40; // Default humidity setpoint (could be extracted from current schedule)
+      const desp = 55; // Default dehumidification setpoint (could be extracted from current schedule)
+      const humidityMode = 'off'; // Default to off - MITM showed "humidify" but that may be system-specific
 
       // Use discovered start time or default
       // Based on MITM capture, startTime 507600 was used, which appears to be a schedule period time
       // We'll use the stored currentStartTime or default to 507600 (matches MITM capture)
+      // TODO: Extract actual current schedule period startTime from system data
       const startTime = this.currentStartTime || 507600;
+      
+      this.platform.log.debug(`[CONTROL] Using startTime: ${startTime}, humidityMode: ${humidityMode}, husp: ${husp}, desp: ${desp}`);
 
       // Step 1: Update schedule with new setpoints
-      // Include all fields from MITM capture to match app behavior
+      // Include all fields from MITM capture in the exact order to match app behavior
+      // Field order from MITM: desp, hsp, cspC, sp, husp, humidityMode, systemMode, spC, hspC, csp, startTime, fanMode
       const scheduleCommand: ScheduleCommand = {
         schedules: [
           {
@@ -504,18 +550,18 @@ export class LennoxiComfortAccessory {
                 {
                   id: 0,
                   period: {
-                    desp,
-                    hsp: Math.round(hspF),
-                    hspC: parseFloat(hspC.toFixed(1)),
-                    csp: Math.round(cspF),
-                    cspC: parseFloat(cspC.toFixed(1)),
-                    sp: spF,
-                    spC: spC,
-                    husp,
-                    humidityMode,
-                    systemMode,
-                    startTime,
-                    fanMode: fanMode || userData.fanMode || 'auto',
+                    desp, // Dehumidification setpoint
+                    hsp: Math.round(hspF), // Heating setpoint (Fahrenheit, integer)
+                    cspC: parseFloat(cspC.toFixed(1)), // Cooling setpoint (Celsius, 1 decimal)
+                    sp: Math.round(spF), // Setpoint (Fahrenheit, integer - matches MITM)
+                    husp, // Humidity setpoint
+                    humidityMode, // Humidity mode
+                    systemMode, // System mode
+                    spC: spC, // Setpoint (Celsius, 1 decimal)
+                    hspC: parseFloat(hspC.toFixed(1)), // Heating setpoint (Celsius, 1 decimal)
+                    csp: Math.round(cspF), // Cooling setpoint (Fahrenheit, integer)
+                    startTime, // Schedule period start time
+                    fanMode: fanMode || userData.fanMode || 'auto', // Fan mode
                   },
                 },
               ],
@@ -533,16 +579,32 @@ export class LennoxiComfortAccessory {
         Data: scheduleCommand,
       };
 
-      this.platform.log.debug(`Publishing schedule command: ${JSON.stringify(scheduleMessage, null, 2)}`);
-      const scheduleResponse = await this.platform.client.publishCommand(scheduleMessage);
-      this.platform.log.debug(`Schedule command response: ${JSON.stringify(scheduleResponse, null, 2)}`);
+      this.platform.log.info(`[CONTROL] Publishing schedule command to schedule ID ${this.scheduleId}`);
+      this.platform.log.debug(`[CONTROL] Schedule command payload: ${JSON.stringify(scheduleMessage, null, 2)}`);
+      
+      let scheduleResponse;
+      try {
+        scheduleResponse = await this.platform.client.publishCommand(scheduleMessage);
+        this.platform.log.info(`[CONTROL] Schedule command response: code=${scheduleResponse.code}, message="${scheduleResponse.message || ''}", retry_after=${scheduleResponse.retry_after || 0}`);
+        this.platform.log.debug(`[CONTROL] Full schedule response: ${JSON.stringify(scheduleResponse, null, 2)}`);
+      } catch (error) {
+        this.platform.log.error(`[CONTROL] Schedule command failed with exception:`, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
 
       // Validate schedule command response
       if (scheduleResponse.code !== 1) {
-        throw new Error(`Schedule command failed with code ${scheduleResponse.code}: ${scheduleResponse.message || 'Unknown error'}`);
+        const errorMsg = `Schedule command failed with code ${scheduleResponse.code}: ${scheduleResponse.message || 'Unknown error'}`;
+        this.platform.log.error(`[CONTROL] ${errorMsg}`);
+        throw new Error(errorMsg);
       }
+      
+      this.platform.log.info(`[CONTROL] Schedule command succeeded`);
 
       // Step 2: Apply schedule hold
+      // Wait a brief moment between commands to ensure schedule update is processed
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       const expiresOn = Math.floor(Date.now() / 1000) + (24 * 60 * 60); // 24 hours from now
 
       const zoneHoldCommand: ZoneHoldCommand = {
@@ -557,7 +619,7 @@ export class LennoxiComfortAccessory {
                 expirationMode: 'timed',
               },
             },
-            id: 0, // Primary zone
+            id: zoneId, // Use discovered zone ID
           },
         ],
       };
@@ -570,18 +632,33 @@ export class LennoxiComfortAccessory {
         Data: zoneHoldCommand,
       };
 
-      this.platform.log.debug(`Publishing zone hold command: ${JSON.stringify(holdMessage, null, 2)}`);
-      const holdResponse = await this.platform.client.publishCommand(holdMessage);
-      this.platform.log.debug(`Zone hold command response: ${JSON.stringify(holdResponse, null, 2)}`);
+      this.platform.log.info(`[CONTROL] Publishing zone hold command for zone ${zoneId}, schedule ${this.scheduleId}`);
+      this.platform.log.debug(`[CONTROL] Zone hold command payload: ${JSON.stringify(holdMessage, null, 2)}`);
+      
+      let holdResponse;
+      try {
+        holdResponse = await this.platform.client.publishCommand(holdMessage);
+        this.platform.log.info(`[CONTROL] Zone hold command response: code=${holdResponse.code}, message="${holdResponse.message || ''}", retry_after=${holdResponse.retry_after || 0}`);
+        this.platform.log.debug(`[CONTROL] Full zone hold response: ${JSON.stringify(holdResponse, null, 2)}`);
+      } catch (error) {
+        this.platform.log.error(`[CONTROL] Zone hold command failed with exception:`, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
 
       // Validate zone hold command response
       if (holdResponse.code !== 1) {
-        throw new Error(`Zone hold command failed with code ${holdResponse.code}: ${holdResponse.message || 'Unknown error'}`);
+        const errorMsg = `Zone hold command failed with code ${holdResponse.code}: ${holdResponse.message || 'Unknown error'}`;
+        this.platform.log.error(`[CONTROL] ${errorMsg}`);
+        throw new Error(errorMsg);
       }
-
-      this.platform.log.info(`Successfully updated setpoints: Heat ${hspF}°F/${hspC}°C, Cool ${cspF}°F/${cspC}°C, Mode: ${systemMode}`);
+      
+      this.platform.log.info(`[CONTROL] Zone hold command succeeded`);
+      this.platform.log.info(`[CONTROL] Successfully updated setpoints: Heat ${hspF}°F/${hspC}°C, Cool ${cspF}°F/${cspC}°C, Mode: ${systemMode}`);
     } catch (error) {
-      this.platform.log.error('Error updating setpoints:', error instanceof Error ? error.message : String(error));
+      this.platform.log.error(`[CONTROL] Error updating setpoints:`, error instanceof Error ? error.message : String(error));
+      if (error instanceof Error && error.stack) {
+        this.platform.log.debug(`[CONTROL] Error stack trace: ${error.stack}`);
+      }
       throw error;
     }
   }
