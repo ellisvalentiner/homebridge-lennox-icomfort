@@ -7,6 +7,7 @@ export class LennoxClient {
   private baseURL = 'https://gatewaymobile.prod4.myicomfort.com';
   private plantBaseURL = 'https://plantdevices.myicomfort.com';
   private publishBaseURL = 'https://publishapimobile.prod4.myicomfort.com';
+  private requestDataBaseURL = 'https://requestdataapimobile.prod4.myicomfort.com';
 
   constructor() {
     this.api = axios.create({
@@ -315,22 +316,63 @@ export class LennoxClient {
 
   /**
    * Publish a command to the system
+   * 
+   * Based on Swagger documentation, commands should be sent to requestdataapimobile endpoint.
+   * The endpoint accepts messages in the same format as publishapimobile.
    */
   async publishCommand(message: PublishMessage, retries: number = 3): Promise<PublishCommandResponse> {
     let lastError: Error | null = null;
     
+    // Get current auth token from defaults (set via setAuthToken)
+    const currentAuth = this.api.defaults.headers.common['Authorization'] as string | undefined;
+    if (!currentAuth) {
+      throw new Error('User token is required. Call login() first to obtain it.');
+    }
+
+    // Extract token (remove any "Bearer" or "bearer" prefix)
+    const userToken = currentAuth.replace(/^(Bearer|bearer)\s+/i, '');
+    
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        const response = await this.api.post<PublishCommandResponse>(
-          `${this.publishBaseURL}/v1/messages/publish`,
-          message,
-          {
-            timeout: 30000,
+        // Try requestdataapimobile first (based on Swagger docs)
+        // If that fails, fall back to publishapimobile
+        let endpoint = `${this.requestDataBaseURL}/v1/messages/publish`;
+        let response: any;
+        
+        try {
+          response = await this.api.post<PublishCommandResponse>(
+            endpoint,
+            message,
+            {
+              headers: {
+                'Authorization': `bearer ${userToken}`, // Ensure lowercase "bearer" for mobile endpoints
+              },
+              timeout: 30000,
+            }
+          );
+        } catch (requestDataError: any) {
+          // If requestdataapimobile fails with 404 or similar, try publishapimobile
+          if (requestDataError.response && (requestDataError.response.status === 404 || requestDataError.response.status === 405)) {
+            endpoint = `${this.publishBaseURL}/v1/messages/publish`;
+            response = await this.api.post<PublishCommandResponse>(
+              endpoint,
+              message,
+              {
+                headers: {
+                  'Authorization': `bearer ${userToken}`,
+                },
+                timeout: 30000,
+              }
+            );
+          } else {
+            throw requestDataError;
           }
-        );
+        }
 
+        // Validate response code (1 = success)
         if (response.data.code !== 1) {
-          throw new Error(`Command failed with code ${response.data.code}: ${response.data.message}`);
+          const errorMsg = `Command failed with code ${response.data.code}: ${response.data.message || 'Unknown error'}`;
+          throw new Error(errorMsg);
         }
 
         return response.data;
@@ -340,10 +382,14 @@ export class LennoxClient {
         if (error.response) {
           const status = error.response.status;
           const statusText = error.response.statusText;
+          const responseData = error.response.data;
+          
+          // Include response data in error message for debugging
+          const errorDetails = responseData ? ` - ${JSON.stringify(responseData)}` : '';
           
           // Don't retry on 401 (auth error) or 400 (bad request)
           if (status === 401 || status === 400) {
-            throw new Error(`Failed to publish command: ${status} ${statusText}`);
+            throw new Error(`Failed to publish command: ${status} ${statusText}${errorDetails}`);
           }
           
           // Retry on 5xx errors
@@ -352,7 +398,7 @@ export class LennoxClient {
             continue;
           }
           
-          throw new Error(`Failed to publish command: ${status} ${statusText}`);
+          throw new Error(`Failed to publish command: ${status} ${statusText}${errorDetails}`);
         }
         
         // Network error - retry
