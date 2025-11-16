@@ -115,99 +115,58 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * Parse zones from local connection response into substatuses
+   * Parse zone messages from retrieved messages into substatuses
    */
-  private parseZonesToSubstatuses(responseData: any): SubStatus[] {
+  private parseZoneMessagesToSubstatuses(messages: any[]): SubStatus[] {
     const substatuses: SubStatus[] = [];
 
-    if (!responseData || typeof responseData !== 'object') {
-      this.log.debug('parseZonesToSubstatuses: responseData is not an object', typeof responseData);
+    if (!Array.isArray(messages) || messages.length === 0) {
+      this.log.debug('parseZoneMessagesToSubstatuses: No messages to parse');
       return substatuses;
     }
 
-    // Debug: log the structure of responseData
-    this.log.debug('parseZonesToSubstatuses: responseData keys:', Object.keys(responseData));
-    if (Array.isArray(responseData)) {
-      this.log.debug('parseZonesToSubstatuses: responseData is an array with length:', responseData.length);
-    }
+    this.log.debug(`parseZoneMessagesToSubstatuses: Processing ${messages.length} message(s)`);
 
-    // Try to find zones array - check multiple possible locations
-    let zonesArray: any[] | null = null;
+    // Process each message to find zone data
+    for (const message of messages) {
+      if (!message || typeof message !== 'object') continue;
 
-    // Check top-level zones
-    if (responseData.zones && Array.isArray(responseData.zones)) {
-      zonesArray = responseData.zones;
-      this.log.debug('parseZonesToSubstatuses: Found zones at top level, count:', zonesArray?.length || 0);
-    }
-    // Check nested under "1" (from JSONPath "1;/zones")
-    else if (responseData['1'] && responseData['1'].zones && Array.isArray(responseData['1'].zones)) {
-      zonesArray = responseData['1'].zones;
-      this.log.debug('parseZonesToSubstatuses: Found zones under "1", count:', zonesArray?.length || 0);
-    }
-    // Check if responseData itself is an array of zones
-    else if (Array.isArray(responseData) && responseData.length > 0 && responseData[0].id !== undefined) {
-      zonesArray = responseData;
-      this.log.debug('parseZonesToSubstatuses: responseData is array of zones, count:', zonesArray?.length || 0);
-    }
-    // Check for zones nested in other common locations
-    else if (responseData.Data && responseData.Data.zones && Array.isArray(responseData.Data.zones)) {
-      zonesArray = responseData.Data.zones;
-      this.log.debug('parseZonesToSubstatuses: Found zones under Data, count:', zonesArray?.length || 0);
-    }
-    // Check if zones is a single object (not array)
-    else if (responseData.zones && typeof responseData.zones === 'object' && !Array.isArray(responseData.zones)) {
-      zonesArray = [responseData.zones];
-      this.log.debug('parseZonesToSubstatuses: Found single zone object, converting to array');
-    }
+      // Look for zone data in the message
+      // Zone messages typically have Data.zones array or Data with zone information
+      let zoneData: any = null;
 
-    if (!zonesArray) {
-      this.log.debug('parseZonesToSubstatuses: No zones array found. Response structure:', JSON.stringify(responseData).substring(0, 500));
-      return substatuses;
-    }
-
-    // Process each zone
-    for (const zone of zonesArray) {
-      if (!zone || typeof zone !== 'object') continue;
-
-      // Extract user_data - it may be a JSON string or an object
-      let userDataString: string | null = null;
-      
-      // Check various possible locations for user_data
-      if (zone.user_data) {
-        if (typeof zone.user_data === 'string') {
-          userDataString = zone.user_data;
-        } else if (typeof zone.user_data === 'object') {
-          userDataString = JSON.stringify(zone.user_data);
-        }
-      } else if (zone.userData) {
-        // Alternative field name (camelCase)
-        if (typeof zone.userData === 'string') {
-          userDataString = zone.userData;
-        } else if (typeof zone.userData === 'object') {
-          userDataString = JSON.stringify(zone.userData);
-        }
-      } else if (zone.data && zone.data.user_data) {
-        // Nested under data
-        if (typeof zone.data.user_data === 'string') {
-          userDataString = zone.data.user_data;
-        } else if (typeof zone.data.user_data === 'object') {
-          userDataString = JSON.stringify(zone.data.user_data);
-        }
-      } else if (zone.data && typeof zone.data === 'object') {
-        // If data is the user_data object itself
-        try {
-          // Try to validate it looks like UserData by checking for common fields
-          if (zone.data.zit !== undefined || zone.data.opMode !== undefined) {
-            userDataString = JSON.stringify(zone.data);
+      if (message.Data && message.Data.zones && Array.isArray(message.Data.zones)) {
+        // Message has zones array
+        for (const zone of message.Data.zones) {
+          if (zone && zone.user_data) {
+            zoneData = zone;
+            break;
           }
-        } catch {
-          // Ignore parsing errors
         }
+      } else if (message.Data && message.Data.user_data) {
+        // Message Data itself contains user_data (single zone)
+        zoneData = message.Data;
+      } else if (message.zones && Array.isArray(message.zones)) {
+        // Zones at top level
+        for (const zone of message.zones) {
+          if (zone && zone.user_data) {
+            zoneData = zone;
+            break;
+          }
+        }
+      } else if (message.user_data) {
+        // user_data at top level
+        zoneData = message;
       }
 
-      // If we have user_data, create a substatus
-      if (userDataString) {
-        const zoneId = zone.id !== undefined ? String(zone.id) : '0';
+      // If we found zone data with user_data, create a substatus
+      if (zoneData && zoneData.user_data) {
+        const userDataString =
+          typeof zoneData.user_data === 'string'
+            ? zoneData.user_data
+            : JSON.stringify(zoneData.user_data);
+
+        const zoneId = zoneData.id !== undefined ? String(zoneData.id) : '0';
         const now = Date.now();
         const nowSeconds = Math.floor(now / 1000);
         const nowNanos = (now % 1000) * 1000000;
@@ -228,15 +187,14 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           },
           user_data: userDataString,
         });
-        this.log.debug(`parseZonesToSubstatuses: Created substatus for zone ${zoneId}`);
-      } else {
-        this.log.debug('parseZonesToSubstatuses: Zone found but no user_data. Zone keys:', Object.keys(zone));
+        this.log.debug(`parseZoneMessagesToSubstatuses: Created substatus for zone ${zoneId}`);
       }
     }
 
-    this.log.debug(`parseZonesToSubstatuses: Returning ${substatuses.length} substatus(es)`);
+    this.log.debug(`parseZoneMessagesToSubstatuses: Returning ${substatuses.length} substatus(es)`);
     return substatuses;
   }
+
 
   /**
    * Remove old cloud accessories when switching to local mode
@@ -297,37 +255,26 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           return;
         }
 
-        // Request system data using RequestData endpoint
-        // JSONPath matches lennoxs30api subscribe for local connections
-        const additionalParams =
-          '"AdditionalParameters":{"JSONPath":"1;/systemControl;/systemController;/reminderSensors;/reminders;/alerts/active;/alerts/meta;/bleProvisionDB;/ble;/indoorAirQuality;/fwm;/rgw;/devices;/zones;/equipments;/schedules;/occupancy;/system"}';
-
-        let responseText: string;
+        // Retrieve zone messages to get status data
+        let messages: any[];
         try {
-          responseText = await this.client.requestData('LCC', additionalParams);
+          messages = await this.client.retrieveMessages({
+            longPollingTimeout: 5.0, // Shorter timeout for initial discovery
+            direction: 'Newest-to-Oldest', // Get most recent messages first
+            messageCount: 20, // Get more messages to find zone data
+            startTime: Math.floor(Date.now() / 1000) - 3600, // Look back 1 hour
+          });
+          this.log.debug(`Retrieved ${messages.length} message(s) from thermostat`);
         } catch (error) {
           this.log.error(
-            'Failed to request system data:',
+            'Failed to retrieve messages:',
             error instanceof Error ? error.message : String(error)
           );
           return;
         }
 
-        // Parse response - it may be a JSON string or already parsed
-        let responseData: any;
-        try {
-          responseData = typeof responseText === 'string' ? JSON.parse(responseText) : responseText;
-        } catch (parseError) {
-          this.log.error(
-            'Failed to parse system data response:',
-            parseError instanceof Error ? parseError.message : String(parseError)
-          );
-          this.log.debug('Response text:', responseText);
-          return;
-        }
-
-        // Parse zones from response into substatuses
-        const substatuses = this.parseZonesToSubstatuses(responseData);
+        // Parse zone messages into substatuses
+        const substatuses = this.parseZoneMessagesToSubstatuses(messages);
 
         // Create a minimal LennoxSystem object for local connections
         // The system ID is "LCC" for local connections
@@ -348,7 +295,7 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
         if (substatuses.length > 0) {
           this.log.info(`Parsed ${substatuses.length} zone(s) from local connection`);
         } else {
-          this.log.warn('No zone data found in initial response - will retry during polling');
+          this.log.warn('No zone data found in retrieved messages - will retry during polling');
         }
 
         this.log.info('Found local system: LCC');
@@ -528,7 +475,7 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
   private async pollSystems(): Promise<void> {
     try {
       if (this.isLocalConnection) {
-        // Local connection mode - use requestData for status updates
+        // Local connection mode - use retrieveMessages for status updates
         if (!this.client.isConnected()) {
           this.log.warn('Not connected to thermostat, attempting to reconnect...');
           try {
@@ -543,36 +490,26 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           }
         }
 
-        // Request status data using RequestData endpoint
-        // JSONPath for zones/schedules/status (matches lennoxs30api)
-        const additionalParams =
-          '"AdditionalParameters":{"JSONPath":"1;/zones;/occupancy;/schedules;/reminderSensors;/reminders;/alerts/active;"}';
-
-        let responseText: string;
+        // Retrieve zone messages to get status updates
+        let messages: any[];
         try {
-          responseText = await this.client.requestData('LCC', additionalParams);
+          messages = await this.client.retrieveMessages({
+            longPollingTimeout: 5.0, // Shorter timeout for polling
+            direction: 'Newest-to-Oldest', // Get most recent messages first
+            messageCount: 20, // Get more messages to find zone data
+            startTime: Math.floor(Date.now() / 1000) - 300, // Look back 5 minutes
+          });
+          this.log.debug(`Retrieved ${messages.length} message(s) during polling`);
         } catch (error) {
           this.log.error(
-            'Failed to request status data:',
+            'Failed to retrieve messages during polling:',
             error instanceof Error ? error.message : String(error)
           );
           return;
         }
 
-        // Parse response
-        let responseData: any;
-        try {
-          responseData = typeof responseText === 'string' ? JSON.parse(responseText) : responseText;
-        } catch (parseError) {
-          this.log.error(
-            'Failed to parse status data response:',
-            parseError instanceof Error ? parseError.message : String(parseError)
-          );
-          return;
-        }
-
-        // Parse zones from response into substatuses
-        const substatuses = this.parseZonesToSubstatuses(responseData);
+        // Parse zone messages into substatuses
+        const substatuses = this.parseZoneMessagesToSubstatuses(messages);
 
         // Create/update system object from response data
         const system: LennoxSystem = {
