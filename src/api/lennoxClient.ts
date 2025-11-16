@@ -47,6 +47,10 @@ export class LennoxClient {
           'Content-Type': 'application/json',
           'Accept-Language': 'en-US;q=1',
         },
+        // Don't validate status codes - let us handle them
+        validateStatus: () => true,
+        // Handle malformed headers from thermostat
+        maxRedirects: 0,
       });
     } else {
       this.appId = `mapp${Date.now()}_user@example.com`; // Still generate for consistency
@@ -620,34 +624,63 @@ export class LennoxClient {
       // Construct request body
       const body = `{"MessageType":"RequestData","SenderID":"${this.appId}","MessageID":"${uuidv4()}","TargetID":"${sysId}",${additionalParameters}}`;
 
-      const response = await this.api.post(url, body, {
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          Accept: '*/*',
-          'Accept-Language': 'en-US;q=1',
-        },
-        timeout: 30000,
+      // Use https directly to avoid axios header validation issues
+      // The thermostat sends both Transfer-Encoding and Content-Length which violates HTTP spec
+      const https = require('https');
+      const urlObj = new URL(url);
+      
+      return new Promise((resolve, reject) => {
+        const options = {
+          hostname: urlObj.hostname,
+          port: urlObj.port || 443,
+          path: urlObj.pathname + urlObj.search,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            Accept: '*/*',
+            'Accept-Language': 'en-US;q=1',
+            'Content-Length': Buffer.byteLength(body),
+          },
+          rejectUnauthorized: false, // Accept self-signed certificates
+          timeout: 30000,
+        };
+
+        const req = https.request(options, (res: any) => {
+          let responseData = '';
+
+          // Ignore header validation issues - just collect the data
+          res.on('data', (chunk: Buffer) => {
+            responseData += chunk.toString();
+          });
+
+          res.on('end', () => {
+            if (res.statusCode === 200) {
+              // Return response text (JSON string)
+              resolve(responseData);
+            } else {
+              reject(
+                new Error(
+                  `RequestData failed with HTTP status ${res.statusCode}${responseData ? ` - ${responseData}` : ''}`
+                )
+              );
+            }
+          });
+        });
+
+        req.on('error', (error: Error) => {
+          reject(new Error(`Failed to request data: ${error.message}`));
+        });
+
+        req.on('timeout', () => {
+          req.destroy();
+          reject(new Error('RequestData request timed out'));
+        });
+
+        req.write(body);
+        req.end();
       });
 
-      if (response.status === 200) {
-        // For local connections, return response text (JSON string)
-        if (typeof response.data === 'string') {
-          return response.data;
-        }
-        // If already parsed, return as-is
-        return response.data;
-      }
-
-      throw new Error(`RequestData failed with HTTP status ${response.status}`);
     } catch (error: any) {
-      if (error.response) {
-        const status = error.response.status;
-        const statusText = error.response.statusText;
-        const responseData = error.response.data;
-        throw new Error(
-          `Failed to request data: ${status} ${statusText}${responseData ? ` - ${JSON.stringify(responseData)}` : ''}`
-        );
-      }
       throw new Error(`Failed to request data: ${error.message}`);
     }
   }

@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Logs
+*.log
+
+# Test storage
+test-storage/
+
+# Sensitive files
+certificate-value.txt
+
+# Generated files
+*.tgz
+
