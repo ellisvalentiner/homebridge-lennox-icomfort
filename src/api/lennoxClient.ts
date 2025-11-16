@@ -699,6 +699,8 @@ export class LennoxClient {
         timeout: (longPollingTimeout + 5) * 1000, // Add 5 seconds buffer
       });
 
+      // HTTP 200 (OK) and 204 (No Content) are both valid responses
+      // 204 means the request was successful but there are no messages
       if (response.status === 200) {
         // Response should be an array of messages
         if (Array.isArray(response.data)) {
@@ -709,6 +711,9 @@ export class LennoxClient {
           return [response.data];
         }
         // If response is empty or null, return empty array
+        return [];
+      } else if (response.status === 204) {
+        // 204 No Content - request successful but no messages available
         return [];
       }
 

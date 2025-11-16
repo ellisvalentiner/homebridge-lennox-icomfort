@@ -115,86 +115,144 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * Parse zone messages from retrieved messages into substatuses
+   * Parse zone messages from Retrieve endpoint into substatuses
+   * Handles PropertyChange messages with Data.zones containing status/period
    */
-  private parseZoneMessagesToSubstatuses(messages: any[]): SubStatus[] {
+  private parseRetrieveMessagesToSubstatuses(messages: any[]): SubStatus[] {
     const substatuses: SubStatus[] = [];
 
     if (!Array.isArray(messages) || messages.length === 0) {
-      this.log.debug('parseZoneMessagesToSubstatuses: No messages to parse');
+      this.log.debug('parseRetrieveMessagesToSubstatuses: No messages to parse');
       return substatuses;
     }
 
-    this.log.debug(`parseZoneMessagesToSubstatuses: Processing ${messages.length} message(s)`);
+    this.log.debug(`parseRetrieveMessagesToSubstatuses: Processing ${messages.length} message(s)`);
+
+    // Check if messages are nested under a 'messages' key
+    let messagesToParse = messages;
+    if (messages.length === 1 && messages[0].messages && Array.isArray(messages[0].messages)) {
+      this.log.debug('parseRetrieveMessagesToSubstatuses: Detected nested messages structure');
+      messagesToParse = messages[0].messages;
+    }
 
     // Process each message to find zone data
-    for (const message of messages) {
+    for (const message of messagesToParse) {
       if (!message || typeof message !== 'object') continue;
 
-      // Look for zone data in the message
-      // Zone messages typically have Data.zones array or Data with zone information
-      let zoneData: any = null;
+      // Look for PropertyChange messages with Data.zones
+      if (message.MessageType === 'PropertyChange' && message.Data && message.Data.zones) {
+        const zones = message.Data.zones;
+        if (Array.isArray(zones)) {
+          for (const zone of zones) {
+            if (!zone || typeof zone !== 'object') continue;
 
-      if (message.Data && message.Data.zones && Array.isArray(message.Data.zones)) {
-        // Message has zones array
-        for (const zone of message.Data.zones) {
-          if (zone && zone.user_data) {
-            zoneData = zone;
-            break;
+            // Zone has status.period structure - convert to UserData
+            if (zone.status && zone.status.period) {
+              try {
+                const status = zone.status;
+                const period = zone.status.period;
+
+                // Map period.systemMode to opMode
+                let opMode: 'hc' | 'heat' | 'cool' | 'off' = 'off';
+                if (period.systemMode === 'heat and cool') {
+                  opMode = 'hc';
+                } else if (period.systemMode === 'heat') {
+                  opMode = 'heat';
+                } else if (period.systemMode === 'cool') {
+                  opMode = 'cool';
+                }
+
+                // Determine status from current state
+                let statusValue: 'h' | 'c' | 'off' = 'off';
+                if (status.heatCoast || (status.temperature && period.hsp && status.temperature < period.hsp)) {
+                  statusValue = 'h';
+                } else if (status.temperature && period.csp && status.temperature > period.csp) {
+                  statusValue = 'c';
+                }
+
+                // Determine display units (assume Fahrenheit if temperature > 50, else Celsius)
+                const dispUnits = status.temperature && status.temperature > 50 ? 'F' : 'C';
+
+                // Construct UserData object
+                const userData: any = {
+                  arr: false,
+                  csp: String(period.csp || 0),
+                  cspC: String(period.cspC || 0),
+                  dband: 2,
+                  dispUnits: dispUnits,
+                  feelsLike: String(status.temperature || 0),
+                  home: 'home',
+                  hsp: String(period.hsp || 0),
+                  hspC: String(period.hspC || 0),
+                  id: zone.id !== undefined ? String(zone.id) : '0',
+                  kind: 'zone',
+                  maxCsp: 90,
+                  maxCspC: '32',
+                  maxHsp: 90,
+                  maxHspC: '32',
+                  minCsp: 50,
+                  minCspC: '10',
+                  minHsp: 40,
+                  minHspC: '4',
+                  numZones: 1,
+                  occ: 'home',
+                  opMode: opMode,
+                  ot: status.temperature || 0,
+                  otC: String(status.temperature || 0),
+                  prdctType: 'thermostat',
+                  rh: String(status.humidity || 0),
+                  rsbusMode: 'auto',
+                  schedNames: '',
+                  ssp: period.startTime || 0,
+                  sspC: String(period.startTime || 0),
+                  sspMode: 'schedule',
+                  status: statusValue,
+                  sysName: 'Local Thermostat',
+                  tstamp: new Date().toISOString(),
+                  version: '1.0',
+                  wsp: String(period.sp || 0),
+                  zit: dispUnits === 'F' ? String(status.temperature || 0) : String(((status.temperature || 0) * 9/5) + 32),
+                  zitC: dispUnits === 'C' ? String(status.temperature || 0) : String(((status.temperature || 0) - 32) * 5/9),
+                  zoneNames: 'Zone 0',
+                  zoningMode: 'single',
+                  fanMode: period.fanMode || 'auto',
+                };
+
+                const userDataString = JSON.stringify(userData);
+                const zoneId = zone.id !== undefined ? String(zone.id) : '0';
+                const now = Date.now();
+                const nowSeconds = Math.floor(now / 1000);
+                const nowNanos = (now % 1000) * 1000000;
+
+                substatuses.push({
+                  relay_id: zoneId,
+                  guid: zoneId,
+                  dds_guid: zoneId,
+                  active: true,
+                  active_ts: {
+                    sec: nowSeconds,
+                    nanosec: nowNanos,
+                  },
+                  alive: true,
+                  alive_ts: {
+                    sec: nowSeconds,
+                    nanosec: nowNanos,
+                  },
+                  user_data: userDataString,
+                });
+                this.log.debug(`parseRetrieveMessagesToSubstatuses: Created substatus for zone ${zoneId}`);
+              } catch (error) {
+                this.log.debug('parseRetrieveMessagesToSubstatuses: Failed to construct UserData from status/period:', error);
+              }
+            }
           }
         }
-      } else if (message.Data && message.Data.user_data) {
-        // Message Data itself contains user_data (single zone)
-        zoneData = message.Data;
-      } else if (message.zones && Array.isArray(message.zones)) {
-        // Zones at top level
-        for (const zone of message.zones) {
-          if (zone && zone.user_data) {
-            zoneData = zone;
-            break;
-          }
-        }
-      } else if (message.user_data) {
-        // user_data at top level
-        zoneData = message;
-      }
-
-      // If we found zone data with user_data, create a substatus
-      if (zoneData && zoneData.user_data) {
-        const userDataString =
-          typeof zoneData.user_data === 'string'
-            ? zoneData.user_data
-            : JSON.stringify(zoneData.user_data);
-
-        const zoneId = zoneData.id !== undefined ? String(zoneData.id) : '0';
-        const now = Date.now();
-        const nowSeconds = Math.floor(now / 1000);
-        const nowNanos = (now % 1000) * 1000000;
-
-        substatuses.push({
-          relay_id: zoneId,
-          guid: zoneId,
-          dds_guid: zoneId,
-          active: true,
-          active_ts: {
-            sec: nowSeconds,
-            nanosec: nowNanos,
-          },
-          alive: true,
-          alive_ts: {
-            sec: nowSeconds,
-            nanosec: nowNanos,
-          },
-          user_data: userDataString,
-        });
-        this.log.debug(`parseZoneMessagesToSubstatuses: Created substatus for zone ${zoneId}`);
       }
     }
 
-    this.log.debug(`parseZoneMessagesToSubstatuses: Returning ${substatuses.length} substatus(es)`);
+    this.log.debug(`parseRetrieveMessagesToSubstatuses: Returning ${substatuses.length} substatus(es)`);
     return substatuses;
   }
-
 
   /**
    * Remove old cloud accessories when switching to local mode
@@ -255,26 +313,44 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           return;
         }
 
-        // Retrieve zone messages to get status data
+        // Request zone data using RequestData + Retrieve (two-step process)
+        // Step 1: RequestData publishes a request for zone data
+        const additionalParams = '"AdditionalParameters":{"JSONPath":"1;/zones"}';
+
+        try {
+          await this.client.requestData('LCC', additionalParams);
+          this.log.debug('RequestData succeeded, waiting for response messages...');
+        } catch (error) {
+          this.log.error(
+            'Failed to request zone data:',
+            error instanceof Error ? error.message : String(error)
+          );
+          return;
+        }
+
+        // Step 2: Retrieve messages to get the response with zone data
+        // Wait a brief moment for the response to be available
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
         let messages: any[];
         try {
           messages = await this.client.retrieveMessages({
-            longPollingTimeout: 5.0, // Shorter timeout for initial discovery
+            longPollingTimeout: 5.0,
             direction: 'Newest-to-Oldest', // Get most recent messages first
-            messageCount: 20, // Get more messages to find zone data
-            startTime: Math.floor(Date.now() / 1000) - 3600, // Look back 1 hour
+            messageCount: 20,
+            startTime: Math.floor(Date.now() / 1000) - 60, // Look back 1 minute for fresh response
           });
-          this.log.debug(`Retrieved ${messages.length} message(s) from thermostat`);
+          this.log.debug(`Retrieved ${messages.length} message(s) after RequestData`);
         } catch (error) {
           this.log.error(
-            'Failed to retrieve messages:',
+            'Failed to retrieve messages after RequestData:',
             error instanceof Error ? error.message : String(error)
           );
           return;
         }
 
         // Parse zone messages into substatuses
-        const substatuses = this.parseZoneMessagesToSubstatuses(messages);
+        const substatuses = this.parseRetrieveMessagesToSubstatuses(messages);
 
         // Create a minimal LennoxSystem object for local connections
         // The system ID is "LCC" for local connections
@@ -293,9 +369,9 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
         };
 
         if (substatuses.length > 0) {
-          this.log.info(`Parsed ${substatuses.length} zone(s) from local connection`);
+          this.log.info(`Parsed ${substatuses.length} zone(s) from Retrieve messages`);
         } else {
-          this.log.warn('No zone data found in retrieved messages - will retry during polling');
+          this.log.warn('No zone data found in Retrieve messages - will retry during polling');
         }
 
         this.log.info('Found local system: LCC');
@@ -490,14 +566,32 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           }
         }
 
-        // Retrieve zone messages to get status updates
+        // Request zone data using RequestData + Retrieve (two-step process)
+        // Step 1: RequestData publishes a request for zone data
+        const additionalParams = '"AdditionalParameters":{"JSONPath":"1;/zones"}';
+
+        try {
+          await this.client.requestData('LCC', additionalParams);
+          this.log.debug('RequestData succeeded during polling, waiting for response messages...');
+        } catch (error) {
+          this.log.error(
+            'Failed to request zone data during polling:',
+            error instanceof Error ? error.message : String(error)
+          );
+          return;
+        }
+
+        // Step 2: Retrieve messages to get the response with zone data
+        // Wait a brief moment for the response to be available
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
         let messages: any[];
         try {
           messages = await this.client.retrieveMessages({
-            longPollingTimeout: 5.0, // Shorter timeout for polling
+            longPollingTimeout: 5.0,
             direction: 'Newest-to-Oldest', // Get most recent messages first
-            messageCount: 20, // Get more messages to find zone data
-            startTime: Math.floor(Date.now() / 1000) - 300, // Look back 5 minutes
+            messageCount: 20,
+            startTime: Math.floor(Date.now() / 1000) - 60, // Look back 1 minute for fresh response
           });
           this.log.debug(`Retrieved ${messages.length} message(s) during polling`);
         } catch (error) {
@@ -509,7 +603,7 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
         }
 
         // Parse zone messages into substatuses
-        const substatuses = this.parseZoneMessagesToSubstatuses(messages);
+        const substatuses = this.parseRetrieveMessagesToSubstatuses(messages);
 
         // Create/update system object from response data
         const system: LennoxSystem = {
@@ -527,9 +621,9 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
         };
 
         if (substatuses.length > 0) {
-          this.log.debug(`Parsed ${substatuses.length} zone(s) from polling response`);
+          this.log.debug(`Parsed ${substatuses.length} zone(s) from Retrieve polling messages`);
         } else {
-          this.log.warn('No zone data found in polling response');
+          this.log.warn('No zone data found in Retrieve polling messages');
         }
 
         // Update accessory with system data
