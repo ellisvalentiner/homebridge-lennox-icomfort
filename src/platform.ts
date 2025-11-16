@@ -313,37 +313,42 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           return;
         }
 
-        // Request zone data using RequestData + Retrieve (two-step process)
-        // Step 1: RequestData publishes a request for zone data
+        // Use RequestData + Retrieve pattern (matches Python lennoxs30api)
+        // Step 1: RequestData publishes a request for zone data using JSONPath
+        // Python uses: JSONPath "1;/zones" for local connections
         const additionalParams = '"AdditionalParameters":{"JSONPath":"1;/zones"}';
 
+        let requestDataError: Error | null = null;
         try {
           await this.client.requestData('LCC', additionalParams);
           this.log.debug('RequestData succeeded, waiting for response messages...');
         } catch (error) {
-          this.log.error(
-            'Failed to request zone data:',
-            error instanceof Error ? error.message : String(error)
+          // If RequestData fails due to header validation, fall back to Retrieve only
+          requestDataError = error instanceof Error ? error : new Error(String(error));
+          this.log.warn(
+            'RequestData failed, using Retrieve only:',
+            requestDataError.message
           );
-          return;
         }
 
-        // Step 2: Retrieve messages to get the response with zone data
-        // Wait a brief moment for the response to be available
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        // Step 2: Retrieve messages to get PropertyChange messages with zone data
+        // Wait a brief moment for the response to be available (if RequestData succeeded)
+        if (!requestDataError) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
 
         let messages: any[];
         try {
           messages = await this.client.retrieveMessages({
-            longPollingTimeout: 5.0,
+            longPollingTimeout: 10.0, // Longer timeout to wait for messages
             direction: 'Newest-to-Oldest', // Get most recent messages first
-            messageCount: 20,
-            startTime: Math.floor(Date.now() / 1000) - 60, // Look back 1 minute for fresh response
+            messageCount: 50, // Get more messages to find zone data
+            startTime: Math.floor(Date.now() / 1000) - 300, // Look back 5 minutes
           });
-          this.log.debug(`Retrieved ${messages.length} message(s) after RequestData`);
+          this.log.debug(`Retrieved ${messages.length} message(s) from thermostat`);
         } catch (error) {
           this.log.error(
-            'Failed to retrieve messages after RequestData:',
+            'Failed to retrieve messages:',
             error instanceof Error ? error.message : String(error)
           );
           return;
@@ -566,32 +571,36 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           }
         }
 
-        // Request zone data using RequestData + Retrieve (two-step process)
-        // Step 1: RequestData publishes a request for zone data
+        // Use RequestData + Retrieve pattern (matches Python lennoxs30api)
+        // Step 1: RequestData publishes a request for zone data using JSONPath
         const additionalParams = '"AdditionalParameters":{"JSONPath":"1;/zones"}';
 
+        let requestDataError: Error | null = null;
         try {
           await this.client.requestData('LCC', additionalParams);
           this.log.debug('RequestData succeeded during polling, waiting for response messages...');
         } catch (error) {
-          this.log.error(
-            'Failed to request zone data during polling:',
-            error instanceof Error ? error.message : String(error)
+          // If RequestData fails, fall back to Retrieve only
+          requestDataError = error instanceof Error ? error : new Error(String(error));
+          this.log.debug(
+            'RequestData failed during polling (using Retrieve only):',
+            requestDataError.message
           );
-          return;
         }
 
-        // Step 2: Retrieve messages to get the response with zone data
-        // Wait a brief moment for the response to be available
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        // Step 2: Retrieve messages to get PropertyChange messages with zone data
+        // Wait a brief moment for the response to be available (if RequestData succeeded)
+        if (!requestDataError) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
 
         let messages: any[];
         try {
           messages = await this.client.retrieveMessages({
-            longPollingTimeout: 5.0,
+            longPollingTimeout: 10.0, // Longer timeout to wait for messages
             direction: 'Newest-to-Oldest', // Get most recent messages first
-            messageCount: 20,
-            startTime: Math.floor(Date.now() / 1000) - 60, // Look back 1 minute for fresh response
+            messageCount: 50, // Get more messages to find zone data
+            startTime: Math.floor(Date.now() / 1000) - 300, // Look back 5 minutes
           });
           this.log.debug(`Retrieved ${messages.length} message(s) during polling`);
         } catch (error) {

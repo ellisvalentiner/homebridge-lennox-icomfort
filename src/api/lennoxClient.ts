@@ -624,9 +624,10 @@ export class LennoxClient {
       // Construct request body
       const body = `{"MessageType":"RequestData","SenderID":"${this.appId}","MessageID":"${uuidv4()}","TargetID":"${sysId}",${additionalParameters}}`;
 
-      // Use https directly to avoid axios header validation issues
+      // Use raw https module - Python lennoxs30api doesn't send headers for local connections
+      // This matches Python implementation: "if self.isLANConnection: headers = None"
       // The thermostat sends both Transfer-Encoding and Content-Length which violates HTTP spec
-      const https = require('https');
+      // By not sending headers, we may avoid triggering the header validation issue
       const urlObj = new URL(url);
       
       return new Promise((resolve, reject) => {
@@ -635,43 +636,56 @@ export class LennoxClient {
           port: urlObj.port || 443,
           path: urlObj.pathname + urlObj.search,
           method: 'POST',
+          // Don't send headers for local connections (matches Python lennoxs30api behavior)
+          // Only send Content-Length which is required for POST requests
           headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            Accept: '*/*',
-            'Accept-Language': 'en-US;q=1',
             'Content-Length': Buffer.byteLength(body),
           },
           rejectUnauthorized: false, // Accept self-signed certificates
-          timeout: 30000,
         };
 
         const req = https.request(options, (res: any) => {
           let responseData = '';
+          let statusCode = res.statusCode || 500;
 
-          // Ignore header validation issues - just collect the data
+          // Collect data chunks
           res.on('data', (chunk: Buffer) => {
             responseData += chunk.toString();
           });
 
           res.on('end', () => {
-            if (res.statusCode === 200) {
-              // Return response text (JSON string)
+            if (statusCode === 200) {
               resolve(responseData);
             } else {
               reject(
                 new Error(
-                  `RequestData failed with HTTP status ${res.statusCode}${responseData ? ` - ${responseData}` : ''}`
+                  `RequestData failed with HTTP status ${statusCode}${responseData ? ` - ${responseData}` : ''}`
                 )
               );
             }
           });
         });
 
+        // Handle connection errors (including parse errors)
         req.on('error', (error: Error) => {
-          reject(new Error(`Failed to request data: ${error.message}`));
+          // Check if it's the header validation error
+          if (error.message.includes("Transfer-Encoding can't be present with Content-Length")) {
+            // The error happens during response parsing, so we can't recover
+            // Log a helpful message
+            reject(
+              new Error(
+                'RequestData failed: Thermostat sent invalid HTTP headers (both Transfer-Encoding and Content-Length). ' +
+                  'This is a known issue with some thermostat firmware versions. ' +
+                  'Try restarting the thermostat or updating its firmware.'
+              )
+            );
+          } else {
+            reject(new Error(`Failed to request data: ${error.message}`));
+          }
         });
 
-        req.on('timeout', () => {
+        // Set timeout
+        req.setTimeout(30000, () => {
           req.destroy();
           reject(new Error('RequestData request timed out'));
         });
