@@ -486,10 +486,9 @@ export class LennoxiComfortAccessory {
       }
 
       const userData = zoneData.userData;
-      const subStatus = zoneData.subStatus;
       const isFahrenheit = userData.dispUnits === 'F';
       
-      // Extract zone ID from userData.id or subStatus
+      // Extract zone ID from userData.id
       // The zone ID appears to be in userData.id, but we need to parse it
       // Based on MITM, zone ID 0 is used for primary zone
       let zoneId = 0;
