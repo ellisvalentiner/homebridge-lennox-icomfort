@@ -481,13 +481,6 @@ export class LennoxiComfortAccessory {
   }
 
   /**
-   * Calculate schedule ID for away mode (24 + zone.id)
-   */
-  private getAwayModeScheduleId(zoneId: number): number {
-    return 24 + zoneId;
-  }
-
-  /**
    * Check if zone is in manual mode
    * Zone is in manual mode if currentScheduleId === 16 + zone.id
    */
@@ -559,7 +552,6 @@ export class LennoxiComfortAccessory {
       // If we had scheduleId, we could check: manual (16+id), override (32+id), or following schedule
       const isManualMode = this.isZoneManualMode(zoneId, this.currentZoneScheduleId);
       const isOverrideMode = this.isZoneOverride(zoneId, this.currentZoneScheduleId);
-      const isFollowingSchedule = !isManualMode && !isOverrideMode;
       
       // Calculate schedule ID based on mode
       let targetScheduleId: number;

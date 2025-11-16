@@ -7,7 +7,6 @@ export class LennoxClient {
   private baseURL = 'https://ic3messaging.myicomfort.com'; // Matches lennoxs30api CLOUD_AUTHENTICATE_URL and CLOUD_LOGIN_URL
   private plantBaseURL = 'https://plantdevices.myicomfort.com';
   private publishBaseURL = 'https://icpublishapi.myicomfort.com'; // Matches lennoxs30api CLOUD_PUBLISH_URL
-  private requestDataBaseURL = 'https://icrequestdataapi.myicomfort.com'; // Matches lennoxs30api CLOUD_REQUESTDATA_URL
 
   constructor() {
     this.api = axios.create({
