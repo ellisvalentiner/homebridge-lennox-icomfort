@@ -121,7 +121,14 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
     const substatuses: SubStatus[] = [];
 
     if (!responseData || typeof responseData !== 'object') {
+      this.log.debug('parseZonesToSubstatuses: responseData is not an object', typeof responseData);
       return substatuses;
+    }
+
+    // Debug: log the structure of responseData
+    this.log.debug('parseZonesToSubstatuses: responseData keys:', Object.keys(responseData));
+    if (Array.isArray(responseData)) {
+      this.log.debug('parseZonesToSubstatuses: responseData is an array with length:', responseData.length);
     }
 
     // Try to find zones array - check multiple possible locations
@@ -130,17 +137,31 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
     // Check top-level zones
     if (responseData.zones && Array.isArray(responseData.zones)) {
       zonesArray = responseData.zones;
+      this.log.debug('parseZonesToSubstatuses: Found zones at top level, count:', zonesArray?.length || 0);
     }
     // Check nested under "1" (from JSONPath "1;/zones")
     else if (responseData['1'] && responseData['1'].zones && Array.isArray(responseData['1'].zones)) {
       zonesArray = responseData['1'].zones;
+      this.log.debug('parseZonesToSubstatuses: Found zones under "1", count:', zonesArray?.length || 0);
     }
     // Check if responseData itself is an array of zones
     else if (Array.isArray(responseData) && responseData.length > 0 && responseData[0].id !== undefined) {
       zonesArray = responseData;
+      this.log.debug('parseZonesToSubstatuses: responseData is array of zones, count:', zonesArray?.length || 0);
+    }
+    // Check for zones nested in other common locations
+    else if (responseData.Data && responseData.Data.zones && Array.isArray(responseData.Data.zones)) {
+      zonesArray = responseData.Data.zones;
+      this.log.debug('parseZonesToSubstatuses: Found zones under Data, count:', zonesArray?.length || 0);
+    }
+    // Check if zones is a single object (not array)
+    else if (responseData.zones && typeof responseData.zones === 'object' && !Array.isArray(responseData.zones)) {
+      zonesArray = [responseData.zones];
+      this.log.debug('parseZonesToSubstatuses: Found single zone object, converting to array');
     }
 
     if (!zonesArray) {
+      this.log.debug('parseZonesToSubstatuses: No zones array found. Response structure:', JSON.stringify(responseData).substring(0, 500));
       return substatuses;
     }
 
@@ -207,9 +228,13 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           },
           user_data: userDataString,
         });
+        this.log.debug(`parseZonesToSubstatuses: Created substatus for zone ${zoneId}`);
+      } else {
+        this.log.debug('parseZonesToSubstatuses: Zone found but no user_data. Zone keys:', Object.keys(zone));
       }
     }
 
+    this.log.debug(`parseZonesToSubstatuses: Returning ${substatuses.length} substatus(es)`);
     return substatuses;
   }
 
