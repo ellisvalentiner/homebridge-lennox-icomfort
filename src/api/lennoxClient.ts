@@ -651,4 +651,78 @@ export class LennoxClient {
       throw new Error(`Failed to request data: ${error.message}`);
     }
   }
+
+  /**
+   * Retrieve messages from the system (for local connections)
+   * Used to get zone messages containing user_data for status updates
+   *
+   * @param options Optional parameters for message retrieval
+   * @param options.longPollingTimeout Timeout in seconds (default: 10.0)
+   * @param options.direction Message direction: "Oldest-to-Newest" or "Newest-to-Oldest" (default: "Oldest-to-Newest")
+   * @param options.messageCount Number of messages to retrieve (default: 10)
+   * @param options.startTime Start time as Unix timestamp (default: current time)
+   * @returns Array of messages
+   */
+  async retrieveMessages(options?: {
+    longPollingTimeout?: number;
+    direction?: 'Oldest-to-Newest' | 'Newest-to-Oldest';
+    messageCount?: number;
+    startTime?: number;
+  }): Promise<any[]> {
+    if (!this.isLocalConnection || !this.localBaseURL) {
+      throw new Error('retrieveMessages is only available for local connections');
+    }
+
+    if (!this.connected) {
+      throw new Error('Not connected to thermostat. Call connect() first.');
+    }
+
+    const longPollingTimeout = options?.longPollingTimeout ?? 10.0;
+    const direction = options?.direction ?? 'Oldest-to-Newest';
+    const messageCount = options?.messageCount ?? 10;
+    const startTime = options?.startTime ?? Math.floor(Date.now() / 1000);
+
+    try {
+      const url = `${this.localBaseURL}/Messages/${this.appId}/Retrieve`;
+      const params = new URLSearchParams({
+        LongPollingTimeout: longPollingTimeout.toFixed(6),
+        direction: direction,
+        messageCount: messageCount.toString(),
+        startTime: startTime.toString(),
+      });
+
+      const response = await this.api.get(`${url}?${params.toString()}`, {
+        headers: {
+          Accept: '*/*',
+          'Accept-Language': 'en-US;q=1',
+        },
+        timeout: (longPollingTimeout + 5) * 1000, // Add 5 seconds buffer
+      });
+
+      if (response.status === 200) {
+        // Response should be an array of messages
+        if (Array.isArray(response.data)) {
+          return response.data;
+        }
+        // If response is a single message object, wrap it in an array
+        if (response.data && typeof response.data === 'object') {
+          return [response.data];
+        }
+        // If response is empty or null, return empty array
+        return [];
+      }
+
+      throw new Error(`Retrieve failed with HTTP status ${response.status}`);
+    } catch (error: any) {
+      if (error.response) {
+        const status = error.response.status;
+        const statusText = error.response.statusText;
+        const responseData = error.response.data;
+        throw new Error(
+          `Failed to retrieve messages: ${status} ${statusText}${responseData ? ` - ${JSON.stringify(responseData)}` : ''}`
+        );
+      }
+      throw new Error(`Failed to retrieve messages: ${error.message}`);
+    }
+  }
 }
