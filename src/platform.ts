@@ -115,6 +115,138 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
   }
 
   /**
+   * Parse zones from local connection response into substatuses
+   */
+  private parseZonesToSubstatuses(responseData: any): SubStatus[] {
+    const substatuses: SubStatus[] = [];
+
+    if (!responseData || typeof responseData !== 'object') {
+      return substatuses;
+    }
+
+    // Try to find zones array - check multiple possible locations
+    let zonesArray: any[] | null = null;
+
+    // Check top-level zones
+    if (responseData.zones && Array.isArray(responseData.zones)) {
+      zonesArray = responseData.zones;
+    }
+    // Check nested under "1" (from JSONPath "1;/zones")
+    else if (responseData['1'] && responseData['1'].zones && Array.isArray(responseData['1'].zones)) {
+      zonesArray = responseData['1'].zones;
+    }
+    // Check if responseData itself is an array of zones
+    else if (Array.isArray(responseData) && responseData.length > 0 && responseData[0].id !== undefined) {
+      zonesArray = responseData;
+    }
+
+    if (!zonesArray) {
+      return substatuses;
+    }
+
+    // Process each zone
+    for (const zone of zonesArray) {
+      if (!zone || typeof zone !== 'object') continue;
+
+      // Extract user_data - it may be a JSON string or an object
+      let userDataString: string | null = null;
+      
+      // Check various possible locations for user_data
+      if (zone.user_data) {
+        if (typeof zone.user_data === 'string') {
+          userDataString = zone.user_data;
+        } else if (typeof zone.user_data === 'object') {
+          userDataString = JSON.stringify(zone.user_data);
+        }
+      } else if (zone.userData) {
+        // Alternative field name (camelCase)
+        if (typeof zone.userData === 'string') {
+          userDataString = zone.userData;
+        } else if (typeof zone.userData === 'object') {
+          userDataString = JSON.stringify(zone.userData);
+        }
+      } else if (zone.data && zone.data.user_data) {
+        // Nested under data
+        if (typeof zone.data.user_data === 'string') {
+          userDataString = zone.data.user_data;
+        } else if (typeof zone.data.user_data === 'object') {
+          userDataString = JSON.stringify(zone.data.user_data);
+        }
+      } else if (zone.data && typeof zone.data === 'object') {
+        // If data is the user_data object itself
+        try {
+          // Try to validate it looks like UserData by checking for common fields
+          if (zone.data.zit !== undefined || zone.data.opMode !== undefined) {
+            userDataString = JSON.stringify(zone.data);
+          }
+        } catch {
+          // Ignore parsing errors
+        }
+      }
+
+      // If we have user_data, create a substatus
+      if (userDataString) {
+        const zoneId = zone.id !== undefined ? String(zone.id) : '0';
+        const now = Date.now();
+        const nowSeconds = Math.floor(now / 1000);
+        const nowNanos = (now % 1000) * 1000000;
+
+        substatuses.push({
+          relay_id: zoneId,
+          guid: zoneId,
+          dds_guid: zoneId,
+          active: true,
+          active_ts: {
+            sec: nowSeconds,
+            nanosec: nowNanos,
+          },
+          alive: true,
+          alive_ts: {
+            sec: nowSeconds,
+            nanosec: nowNanos,
+          },
+          user_data: userDataString,
+        });
+      }
+    }
+
+    return substatuses;
+  }
+
+  /**
+   * Remove old cloud accessories when switching to local mode
+   */
+  private removeOldCloudAccessories(): void {
+    const lccUuid = this.api.hap.uuid.generate('LCC');
+    const accessoriesToRemove: PlatformAccessory[] = [];
+
+    // Find all accessories that aren't the local LCC system
+    for (const accessory of this.accessories) {
+      if (accessory.UUID !== lccUuid) {
+        accessoriesToRemove.push(accessory);
+      }
+    }
+
+    // Unregister and remove old accessories
+    if (accessoriesToRemove.length > 0) {
+      this.log.info(
+        `Removing ${accessoriesToRemove.length} old cloud accessory(ies) in favor of local connection`
+      );
+      this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, accessoriesToRemove);
+
+      // Remove from our tracking arrays
+      for (const accessory of accessoriesToRemove) {
+        const index = this.accessories.indexOf(accessory);
+        if (index > -1) {
+          this.accessories.splice(index, 1);
+        }
+        // Remove handler reference
+        this.accessoryHandlers.delete(accessory.UUID);
+      }
+    }
+  }
+
+  /**
    * This is an example method showing how to register discovered accessories.
    * Accessories must only be registered once, previously created accessories
    * must not be registered again to prevent "duplicate UUID" errors.
@@ -124,6 +256,9 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
       if (this.isLocalConnection) {
         // Local connection mode
         this.log.info('Discovering Lennox iComfort systems via local connection...');
+
+        // Remove old cloud accessories if any exist
+        this.removeOldCloudAccessories();
 
         // Connect to thermostat
         try {
@@ -166,6 +301,9 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           return;
         }
 
+        // Parse zones from response into substatuses
+        const substatuses = this.parseZonesToSubstatuses(responseData);
+
         // Create a minimal LennoxSystem object for local connections
         // The system ID is "LCC" for local connections
         const system: LennoxSystem = {
@@ -178,16 +316,14 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
             arr: false,
             active: true,
             alive: true,
-            substatuses: [], // Will be populated from response data if available
+            substatuses: substatuses,
           },
         };
 
-        // Try to extract status information from response if available
-        // The response structure may vary, so we'll handle it gracefully
-        if (responseData && typeof responseData === 'object') {
-          // Store raw response data for later use in polling
-          // We'll parse it more fully in pollSystems
-          this.log.debug('Received system data from local connection');
+        if (substatuses.length > 0) {
+          this.log.info(`Parsed ${substatuses.length} zone(s) from local connection`);
+        } else {
+          this.log.warn('No zone data found in initial response - will retry during polling');
         }
 
         this.log.info('Found local system: LCC');
@@ -410,9 +546,10 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           return;
         }
 
+        // Parse zones from response into substatuses
+        const substatuses = this.parseZonesToSubstatuses(responseData);
+
         // Create/update system object from response data
-        // For now, we'll create a minimal system object and let the accessory handle parsing
-        // The actual parsing of zones/schedules will be done in the accessory's updateStatus method
         const system: LennoxSystem = {
           id: 0,
           extId: 'LCC',
@@ -423,19 +560,14 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
             arr: false,
             active: true,
             alive: true,
-            substatuses: [], // Will be populated from response if available
+            substatuses: substatuses,
           },
         };
 
-        // Try to extract substatuses from response if available
-        // The response structure may contain zones with user_data
-        if (responseData && typeof responseData === 'object') {
-          // Parse zones if available
-          if (responseData.zones && Array.isArray(responseData.zones)) {
-            // Process zones to create substatuses
-            // This is a simplified version - full parsing would extract user_data from each zone
-            this.log.debug('Received zone data from local connection');
-          }
+        if (substatuses.length > 0) {
+          this.log.debug(`Parsed ${substatuses.length} zone(s) from polling response`);
+        } else {
+          this.log.warn('No zone data found in polling response');
         }
 
         // Update accessory with system data
