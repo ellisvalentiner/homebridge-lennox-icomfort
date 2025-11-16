@@ -4,10 +4,10 @@ import { getCertificate } from './certificate';
 
 export class LennoxClient {
   private api: AxiosInstance;
-  private baseURL = 'https://gatewaymobile.prod4.myicomfort.com';
+  private baseURL = 'https://ic3messaging.myicomfort.com'; // Matches lennoxs30api CLOUD_AUTHENTICATE_URL and CLOUD_LOGIN_URL
   private plantBaseURL = 'https://plantdevices.myicomfort.com';
-  private publishBaseURL = 'https://publishapimobile.prod4.myicomfort.com';
-  private requestDataBaseURL = 'https://requestdataapimobile.prod4.myicomfort.com';
+  private publishBaseURL = 'https://icpublishapi.myicomfort.com'; // Matches lennoxs30api CLOUD_PUBLISH_URL
+  private requestDataBaseURL = 'https://icrequestdataapi.myicomfort.com'; // Matches lennoxs30api CLOUD_REQUESTDATA_URL
 
   constructor() {
     this.api = axios.create({
@@ -317,8 +317,7 @@ export class LennoxClient {
   /**
    * Publish a command to the system
    * 
-   * Based on Swagger documentation, commands should be sent to requestdataapimobile endpoint.
-   * The endpoint accepts messages in the same format as publishapimobile.
+   * Matches lennoxs30api publishMessageHelper - uses publish endpoint directly
    */
   async publishCommand(message: PublishMessage, retries: number = 3): Promise<PublishCommandResponse> {
     let lastError: Error | null = null;
@@ -332,42 +331,24 @@ export class LennoxClient {
     // Extract token (remove any "Bearer" or "bearer" prefix)
     const userToken = currentAuth.replace(/^(Bearer|bearer)\s+/i, '');
     
+    // Use publish endpoint directly (matches lennoxs30api publishMessageHelper)
+    const endpoint = `${this.publishBaseURL}/v1/messages/publish`;
+    
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        // Try requestdataapimobile first (based on Swagger docs)
-        // If that fails, fall back to publishapimobile
-        let endpoint = `${this.requestDataBaseURL}/v1/messages/publish`;
-        let response: any;
-        
-        try {
-          response = await this.api.post<PublishCommandResponse>(
-            endpoint,
-            message,
-            {
-              headers: {
-                'Authorization': `bearer ${userToken}`, // Ensure lowercase "bearer" for mobile endpoints
-              },
-              timeout: 30000,
-            }
-          );
-        } catch (requestDataError: any) {
-          // If requestdataapimobile fails with 404 or similar, try publishapimobile
-          if (requestDataError.response && (requestDataError.response.status === 404 || requestDataError.response.status === 405)) {
-            endpoint = `${this.publishBaseURL}/v1/messages/publish`;
-            response = await this.api.post<PublishCommandResponse>(
-              endpoint,
-              message,
-              {
-                headers: {
-                  'Authorization': `bearer ${userToken}`,
-                },
-                timeout: 30000,
-              }
-            );
-          } else {
-            throw requestDataError;
+        const response = await this.api.post<PublishCommandResponse>(
+          endpoint,
+          message,
+          {
+            headers: {
+              'Authorization': `bearer ${userToken}`, // Lowercase "bearer" matches lennoxs30api
+              'Content-Type': 'application/json',
+              'Accept': '*/*',
+              'Accept-Language': 'en-US;q=1',
+            },
+            timeout: 30000,
           }
-        }
+        );
 
         // Validate response code (1 = success)
         if (response.data.code !== 1) {
