@@ -488,19 +488,11 @@ export class LennoxiComfortAccessory {
       const userData = zoneData.userData;
       const isFahrenheit = userData.dispUnits === 'F';
       
-      // Extract zone ID from userData.id
-      // The zone ID appears to be in userData.id, but we need to parse it
-      // Based on MITM, zone ID 0 is used for primary zone
-      let zoneId = 0;
-      try {
-        // Try to extract zone ID from userData.id if it's numeric
-        const parsedId = parseInt(userData.id, 10);
-        if (!isNaN(parsedId)) {
-          zoneId = parsedId;
-        }
-      } catch (e) {
-        // Keep default zone ID 0
-      }
+      // Zone ID should be 0 for primary zone (as shown in MITM capture)
+      // userData.id is a UUID/identifier, not a zone ID
+      // For single-zone systems, zone ID is always 0
+      // For multi-zone systems, we'd need to determine the zone from substatus index
+      const zoneId = 0; // Primary zone - matches MITM capture
       
       this.platform.log.debug(`[CONTROL] Using zone ID: ${zoneId}, schedule ID: ${this.scheduleId}`);
 
@@ -653,6 +645,16 @@ export class LennoxiComfortAccessory {
       
       this.platform.log.info(`[CONTROL] Zone hold command succeeded`);
       this.platform.log.info(`[CONTROL] Successfully updated setpoints: Heat ${hspF}°F/${hspC}°C, Cool ${cspF}°F/${cspC}°C, Mode: ${systemMode}`);
+      
+      // Wait a moment for the system to process the commands
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Note: The thermostat should update within a few seconds
+      // If it doesn't, check the logs for any errors or verify:
+      // 1. Zone ID is correct (should be 0 for primary zone)
+      // 2. Schedule ID matches an existing schedule (32 is default)
+      // 3. StartTime matches current schedule period (507600 is default)
+      // 4. All command fields match the MITM capture structure
     } catch (error) {
       this.platform.log.error(`[CONTROL] Error updating setpoints:`, error instanceof Error ? error.message : String(error));
       if (error instanceof Error && error.stack) {
