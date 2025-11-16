@@ -6,10 +6,16 @@
   "scripts": {
     "build": "tsc",
     "watch": "npm run build && npm link && nodemon",
+    "clean": "rm -rf dist",
+    "type-check": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"*.md\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"*.md\"",
     "format:md": "prettier --write \"*.md\"",
     "format:md:check": "prettier --check \"*.md\"",
+    "test": "echo \"No tests specified\" && exit 0",
+    "prepare": "husky install",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -44,8 +50,20 @@
     "@typescript-eslint/parser": "^6.13.0",
     "eslint": "^8.54.0",
     "homebridge": "^2.0.0-beta.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.2.0",
     "nodemon": "^3.0.2",
+    "prettier": "^3.1.0",
     "typescript": "^5.3.2"
+  },
+  "lint-staged": {
+    "src/**/*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.md": [
+      "prettier --write"
+    ]
   }
 }
 

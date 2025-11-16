@@ -30,9 +30,33 @@ Homebridge plugin for Lennox iComfort thermostats. This plugin allows you to con
    npm link
    ```
 
-3. **Extract the certificate** (required for authentication):
+3. **Choose connection mode**: The plugin supports two connection modes:
 
-   The plugin requires a certificate extracted from the Lennox mobile app. You'll need to:
+   **Local Control (Recommended)**: Direct connection to your thermostat on your local network. No authentication required.
+
+   **Cloud Control**: Connection via Lennox cloud API. Requires certificate extraction (see below).
+
+4. Configure the plugin in Homebridge UI or `config.json`:
+
+   **For Local Control (Recommended)**:
+
+   ```json
+   {
+     "platforms": [
+       {
+         "name": "LennoxiComfort",
+         "platform": "LennoxiComfort",
+         "thermostatIP": "192.168.1.100",
+         "connectionMode": "local",
+         "pollingInterval": 60
+       }
+     ]
+   }
+   ```
+
+   **For Cloud Control** (requires certificate extraction):
+
+   First, extract the certificate from the Lennox mobile app:
 
    a. Set up a MITM proxy (e.g., mitmproxy, Charles Proxy, or Proxyman)
    b. Configure your device to use the proxy
@@ -42,15 +66,13 @@ Homebridge plugin for Lennox iComfort thermostats. This plugin allows you to con
 
    See [CERTIFICATE_EXTRACTION.md](CERTIFICATE_EXTRACTION.md) for detailed instructions.
 
-4. Set the certificate as an environment variable:
+   Then set the certificate as an environment variable:
 
    ```bash
    export LENNOX_CERTIFICATE="your-extracted-certificate-here"
    ```
 
-   Or add it to your Homebridge environment (e.g., in systemd service file or `.env` file).
-
-5. Configure the plugin in Homebridge UI or `config.json`:
+   And configure:
 
    ```json
    {
@@ -60,6 +82,7 @@ Homebridge plugin for Lennox iComfort thermostats. This plugin allows you to con
          "platform": "LennoxiComfort",
          "username": "your-email@example.com",
          "password": "your-password",
+         "connectionMode": "cloud",
          "pollingInterval": 60
        }
      ]
@@ -68,10 +91,25 @@ Homebridge plugin for Lennox iComfort thermostats. This plugin allows you to con
 
 ## Configuration
 
-- **username** (required): Your Lennox iComfort account email address
-- **password** (required): Your Lennox iComfort account password
+### Local Control Mode (Recommended)
+
+- **thermostatIP** (required for local mode): IP address of your Lennox thermostat on your local network
+  - To find your thermostat's IP address:
+    - Check your router's DHCP client list
+    - Use a network scanner app
+    - Check the thermostat's network settings (if accessible)
+- **connectionMode** (optional): Set to `"local"` to force local mode, `"cloud"` to force cloud mode, or `"auto"` (default) to auto-detect based on whether `thermostatIP` is provided
 - **pollingInterval** (optional): How often to poll for status updates in seconds (default: 60, range: 30-300)
 - **temperatureUnit** (optional): Temperature display unit - "auto" (uses system preference), "F", or "C" (default: "auto")
+
+### Cloud Control Mode
+
+- **username** (required for cloud mode): Your Lennox iComfort account email address
+- **password** (required for cloud mode): Your Lennox iComfort account password
+- **connectionMode** (optional): Set to `"cloud"` to force cloud mode, `"local"` to force local mode, or `"auto"` (default) to auto-detect
+- **pollingInterval** (optional): How often to poll for status updates in seconds (default: 60, range: 30-300)
+- **temperatureUnit** (optional): Temperature display unit - "auto" (uses system preference), "F", or "C" (default: "auto")
+- **LENNOX_CERTIFICATE** (required for cloud mode): Environment variable containing the extracted certificate
 
 ## Supported Features
 
@@ -95,11 +133,35 @@ Homebridge plugin for Lennox iComfort thermostats. This plugin allows you to con
 
 - Currently supports only the primary zone of each system
 - Multi-zone support may be added in future versions
-- Certificate extraction required for authentication (see [CERTIFICATE_EXTRACTION.md](CERTIFICATE_EXTRACTION.md))
+- Certificate extraction required for cloud mode only (local mode does not require authentication)
 
 ## Troubleshooting
 
-### Authentication Issues
+### Local Control Issues
+
+**Cannot connect to thermostat:**
+
+- Verify the thermostat IP address is correct
+- Ensure the thermostat is on the same local network as Homebridge
+- Check that the thermostat is powered on and connected to Wi-Fi
+- Try pinging the thermostat IP address from the Homebridge server
+- Check Homebridge logs for connection errors
+
+**SSL certificate warnings:**
+
+- Local connections use self-signed certificates, which is expected
+- The plugin automatically accepts these certificates
+- You may see warnings in logs, but these can be safely ignored
+
+**Setpoint changes not working:**
+
+- Verify the connection is established (check logs for "Connected to thermostat")
+- Ensure the thermostat is not in a locked state
+- Check Homebridge logs for command errors
+
+### Cloud Control Issues
+
+**Authentication Errors:**
 
 If you encounter authentication errors:
 
@@ -108,17 +170,20 @@ If you encounter authentication errors:
 3. Check that your account has access to the iComfort system
 4. Try extracting a fresh certificate if authentication fails (see [CERTIFICATE_EXTRACTION.md](CERTIFICATE_EXTRACTION.md))
 
-### System Not Appearing
+**System Not Appearing:**
 
 - Ensure your system is online and connected to the iComfort service
 - Check Homebridge logs for error messages
 - Verify your account has access to the system
 
-### Temperature Not Updating
+### General Issues
+
+**Temperature Not Updating:**
 
 - Check the polling interval setting
 - Verify network connectivity
 - Check Homebridge logs for API errors
+- For local mode, verify the connection is still active
 
 ## Development
 

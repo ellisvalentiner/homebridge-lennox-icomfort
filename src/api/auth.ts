@@ -34,21 +34,21 @@ export class AuthManager {
     try {
       // Step 1: Get certificate token (if needed or expired)
       let certificateToken: string | undefined;
-      
+
       if (!this.tokenData?.certificateToken || this.isCertificateTokenExpired()) {
         try {
           // Get certificate token via certificate authentication
           // This must be done before username/password login
           const certAuthResponse = await this.client.authenticate();
           const certToken = certAuthResponse.serverAssigned.security.certificateToken;
-          
+
           if (!certToken || !certToken.encoded) {
             throw new Error('Certificate authentication response missing token');
           }
-          
+
           // Extract the token (remove 'bearer ' prefix if present)
           certificateToken = certToken.encoded.replace(/^bearer\s+/i, '');
-          
+
           // Store certificate token
           if (!this.tokenData) {
             this.tokenData = {
@@ -65,8 +65,8 @@ export class AuthManager {
           const errorMessage = certError instanceof Error ? certError.message : 'Unknown error';
           throw new Error(
             `Certificate authentication failed: ${errorMessage}. ` +
-            `This is the first step of authentication. Please check if the certificate is valid and not expired. ` +
-            `Verify that LENNOX_CERTIFICATE environment variable is set correctly.`
+              `This is the first step of authentication. Please check if the certificate is valid and not expired. ` +
+              `Verify that LENNOX_CERTIFICATE environment variable is set correctly.`
           );
         }
       } else {
@@ -81,12 +81,12 @@ export class AuthManager {
       try {
         const response = await this.client.login(username, password, certificateToken);
         this.saveTokens(response);
-        
+
         // Step 3: Register LCC owner to get plant token (JWT) for systems endpoint
         try {
           const userToken = response.ServerAssignedRoot.serverAssigned.security.userToken.encoded;
           const registerResponse = await this.client.registerLCCOwner(username, userToken);
-          
+
           // Store plant token
           if (!this.tokenData) {
             throw new Error('Token data not available after login');
@@ -102,12 +102,16 @@ export class AuthManager {
         const errorMessage = loginError instanceof Error ? loginError.message : 'Unknown error';
         throw new Error(
           `User login failed: ${errorMessage}. ` +
-          `Please verify your username and password are correct.`
+            `Please verify your username and password are correct.`
         );
       }
     } catch (error) {
       // Re-throw if already formatted, otherwise wrap
-      if (error instanceof Error && (error.message.includes('Certificate authentication failed') || error.message.includes('User login failed'))) {
+      if (
+        error instanceof Error &&
+        (error.message.includes('Certificate authentication failed') ||
+          error.message.includes('User login failed'))
+      ) {
         throw error;
       }
       throw new Error(`Login failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -118,6 +122,13 @@ export class AuthManager {
    * Get current user token, refreshing if necessary
    */
   async getToken(): Promise<string> {
+    // Local connections don't use authentication tokens
+    if (this.client.isLocalConnection) {
+      throw new Error(
+        'getToken() is not available for local connections. Local connections do not require authentication.'
+      );
+    }
+
     if (!this.tokenData) {
       throw new Error('Not authenticated. Please login first.');
     }
@@ -135,6 +146,13 @@ export class AuthManager {
    * Get plant token (JWT) for plantdevices endpoints
    */
   async getPlantToken(): Promise<string> {
+    // Local connections don't use authentication tokens
+    if (this.client.isLocalConnection) {
+      throw new Error(
+        'getPlantToken() is not available for local connections. Local connections do not require authentication.'
+      );
+    }
+
     if (!this.tokenData) {
       throw new Error('Not authenticated. Please login first.');
     }
@@ -170,11 +188,11 @@ export class AuthManager {
    */
   private saveTokens(loginResponse: LoginResponse): void {
     const token = loginResponse.ServerAssignedRoot.serverAssigned.security.userToken;
-    
+
     // Preserve certificate token if it exists
     const existingCertToken = this.tokenData?.certificateToken;
     const existingCertTokenExpiry = this.tokenData?.certificateTokenExpiry;
-    
+
     this.tokenData = {
       userToken: token.encoded.replace(/^bearer\s+/i, ''),
       refreshToken: token.refreshToken.replace(/^bearer\s+/i, ''),
@@ -200,7 +218,9 @@ export class AuthManager {
       fs.mkdirSync(this.storagePath, { recursive: true });
       fs.writeFileSync(tokenFile, JSON.stringify(this.tokenData, null, 2));
     } catch (error) {
-      throw new Error(`Failed to save tokens: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to save tokens: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -211,7 +231,7 @@ export class AuthManager {
     if (!this.tokenData?.certificateTokenExpiry) {
       return true;
     }
-    
+
     // Check if token is expired or will expire in the next 5 minutes
     const now = Date.now() / 1000;
     return this.tokenData.certificateTokenExpiry - now < 300;
@@ -250,10 +270,13 @@ export class AuthManager {
 
   /**
    * Check if user is authenticated
+   * For local connections, always returns true (no authentication required)
    */
   isAuthenticated(): boolean {
+    // Local connections don't require authentication
+    if (this.client.isLocalConnection) {
+      return true;
+    }
     return this.tokenData !== null;
   }
 }
-
-

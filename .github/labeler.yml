@@ -2,27 +2,29 @@
 # Automatically labels PRs based on file paths
 # See: https://github.com/actions/labeler
 
-# Frontend/UI changes
-frontend:
+# API/Backend changes
+api:
   - changed-files:
-      - any-glob-to-any-file: '**/frontend/**'
-      - any-glob-to-any-file: '**/ui/**'
-      - any-glob-to-any-file: '**/components/**'
-      - any-glob-to-any-file: '**/*.tsx'
-      - any-glob-to-any-file: '**/*.jsx'
-      - any-glob-to-any-file: '**/*.vue'
-      - any-glob-to-any-file: '**/*.svelte'
-
-# Backend/API changes
-backend:
-  - changed-files:
-      - any-glob-to-any-file: '**/backend/**'
       - any-glob-to-any-file: '**/api/**'
-      - any-glob-to-any-file: '**/server/**'
-      - any-glob-to-any-file: '**/*.go'
-      - any-glob-to-any-file: '**/*.py'
-      - any-glob-to-any-file: '**/*.java'
-      - any-glob-to-any-file: '**/*.rb'
+      - any-glob-to-any-file: '**/src/api/**'
+
+# Core platform code
+platform:
+  - changed-files:
+      - any-glob-to-any-file: '**/src/platform.ts'
+      - any-glob-to-any-file: '**/src/index.ts'
+
+# Accessory/Device code
+accessory:
+  - changed-files:
+      - any-glob-to-any-file: '**/src/thermostatAccessory.ts'
+      - any-glob-to-any-file: '**/src/*Accessory.ts'
+
+# TypeScript source files
+typescript:
+  - changed-files:
+      - any-glob-to-any-file: '**/*.ts'
+      - any-glob-to-any-file: '**/tsconfig.json'
 
 # Documentation changes
 documentation:
@@ -35,42 +37,32 @@ documentation:
 # Test files
 tests:
   - changed-files:
-      - any-glob-to-any-file: '**/*_test.go'
       - any-glob-to-any-file: '**/*.test.*'
       - any-glob-to-any-file: '**/*.spec.*'
       - any-glob-to-any-file: '**/test/**'
       - any-glob-to-any-file: '**/tests/**'
+      - any-glob-to-any-file: '**/test-*.js'
 
 # Configuration files
 config:
   - changed-files:
       - any-glob-to-any-file: '**/*.yaml'
       - any-glob-to-any-file: '**/*.yml'
-      - any-glob-to-any-file: '**/*.json'
-      - any-glob-to-any-file: '**/*.toml'
+      - any-glob-to-any-file: '**/config.schema.json'
+      - any-glob-to-any-file: '**/tsconfig.json'
+      - any-glob-to-any-file: '**/.eslintrc*'
+      - any-glob-to-any-file: '**/.prettierrc*'
       - any-glob-to-any-file: '**/.github/**'
-      - any-glob-to-any-file: '**/Dockerfile*'
-      - any-glob-to-any-file: '**/docker-compose*'
 
 # CI/CD changes
 ci:
   - changed-files:
       - any-glob-to-any-file: '**/.github/workflows/**'
       - any-glob-to-any-file: '**/.github/actions/**'
-      - any-glob-to-any-file: '**/.circleci/**'
-      - any-glob-to-any-file: '**/.travis.yml'
-      - any-glob-to-any-file: '**/.gitlab-ci.yml'
 
 # Dependencies
 dependencies:
   - changed-files:
-      - any-glob-to-any-file: '**/go.mod'
-      - any-glob-to-any-file: '**/go.sum'
       - any-glob-to-any-file: '**/package.json'
       - any-glob-to-any-file: '**/package-lock.json'
-      - any-glob-to-any-file: '**/requirements.txt'
-      - any-glob-to-any-file: '**/Pipfile'
-      - any-glob-to-any-file: '**/poetry.lock'
-      - any-glob-to-any-file: '**/Cargo.toml'
-      - any-glob-to-any-file: '**/Cargo.lock'
 

@@ -10,4 +10,17 @@ test-storage/
 # Certificate value file (contains sensitive data)
 certificate-value.txt
 
+# Temporary work/debugging files
+mitm-login.txt
+request-response-payloads.txt
+test-auth.js
+*.tmp
+*.temp
+*_debug.txt
+*_log.txt
+
+# Test scripts (development only)
+test-*.js
+!test/**/*.test.ts
+
 

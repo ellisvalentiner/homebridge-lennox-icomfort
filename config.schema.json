@@ -14,18 +14,37 @@
         "default": "LennoxiComfort",
         "description": "Name of the platform as it appears in Homebridge"
       },
+      "thermostatIP": {
+        "title": "Thermostat IP Address",
+        "type": "string",
+        "required": false,
+        "format": "ipv4",
+        "description": "IP address of your Lennox thermostat on the local network (required for local control mode)"
+      },
+      "connectionMode": {
+        "title": "Connection Mode",
+        "type": "string",
+        "required": false,
+        "default": "auto",
+        "enum": [
+          "auto",
+          "local",
+          "cloud"
+        ],
+        "description": "Connection mode: 'auto' (use local if IP provided, else cloud), 'local' (force local control), 'cloud' (force cloud control)"
+      },
       "username": {
         "title": "Username",
         "type": "string",
-        "required": true,
-        "description": "Your Lennox iComfort account email address"
+        "required": false,
+        "description": "Your Lennox iComfort account email address (required for cloud mode only)"
       },
       "password": {
         "title": "Password",
         "type": "string",
-        "required": true,
+        "required": false,
         "format": "password",
-        "description": "Your Lennox iComfort account password"
+        "description": "Your Lennox iComfort account password (required for cloud mode only)"
       },
       "pollingInterval": {
         "title": "Polling Interval (seconds)",

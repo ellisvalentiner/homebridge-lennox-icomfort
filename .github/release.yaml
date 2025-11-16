@@ -1,5 +1,6 @@
 # GitHub Release Configuration
-# Settings for automated releases
+# Note: This file is a reference/template for release practices.
+# The actual release automation is handled by .github/workflows/release.yml
 
 changelog:
   # Generate changelog from PRs
@@ -35,22 +36,20 @@ branches:
   - main
 
 # Version bumping
+# Note: Version is managed in package.json for Node.js projects
 version:
-  # Auto-increment version on release
-  auto_increment: true
+  # Version is stored in package.json
+  file: 'package.json'
   
-  # Version file paths to update
-  files:
-    - 'VERSION'
-    - 'version.txt'
-    - 'internal/version/version.go'
-
 # Pre-release checks
+# These are enforced by the release workflow (.github/workflows/release.yml)
 checks:
   - name: 'All tests pass'
     required: true
-  - name: 'No merge conflicts'
+  - name: 'Build succeeds'
     required: true
-  - name: 'Linked Jira tickets'
-    required: false
+  - name: 'Linter passes'
+    required: true
+  - name: 'package.json version matches tag'
+    required: true
 

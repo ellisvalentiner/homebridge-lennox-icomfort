@@ -206,5 +206,3 @@ export interface UserInfo {
 export interface UserResponse {
   users: UserInfo[];
 }
-
-
