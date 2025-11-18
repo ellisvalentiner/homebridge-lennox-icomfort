@@ -152,6 +152,14 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
       const messageType = message.MessageType || 'unknown';
       this.log.debug(`parseRetrieveMessagesToSubstatuses: Processing message ${i + 1}/${messagesToParse.length}, type: ${messageType}`);
 
+      // Check if PropertyChange message has Data field
+      if (message.MessageType === 'PropertyChange') {
+        if (!message.Data) {
+          this.log.debug(`parseRetrieveMessagesToSubstatuses: PropertyChange message has no Data field - this is just a notification, zone data may come in a later message`);
+          continue;
+        }
+      }
+
       // Look for PropertyChange messages with Data.zones
       if (message.MessageType === 'PropertyChange' && message.Data && message.Data.zones) {
         const zones = message.Data.zones;
@@ -444,47 +452,86 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
 
         // Use RequestData + Retrieve pattern (matches Python lennoxs30api)
         // Step 1: RequestData publishes a request for zone data using JSONPath
-        // Python uses: JSONPath "1;/zones" for local connections
-        const additionalParams = '"AdditionalParameters":{"JSONPath":"1;/zones"}';
+        // Python uses: JSONPath "1;/zones;/equipments;/schedules;..." for local connections
+        // Try with more comprehensive JSONPath first, then fall back to just zones
+        const jsonPathOptions = [
+          '"AdditionalParameters":{"JSONPath":"1;/zones;/equipments;/schedules"}',
+          '"AdditionalParameters":{"JSONPath":"1;/zones"}',
+        ];
 
         let requestDataError: Error | null = null;
-        try {
-          await this.client.requestData('LCC', additionalParams);
-          this.log.debug('RequestData succeeded, waiting for response messages...');
-        } catch (error) {
-          // If RequestData fails due to header validation, fall back to Retrieve only
-          requestDataError = error instanceof Error ? error : new Error(String(error));
-          this.log.warn(
-            'RequestData failed, using Retrieve only:',
-            requestDataError.message
-          );
+        for (let i = 0; i < jsonPathOptions.length; i++) {
+          try {
+            await this.client.requestData('LCC', jsonPathOptions[i]);
+            this.log.debug(`RequestData succeeded with JSONPath option ${i + 1}, waiting for response messages...`);
+            requestDataError = null;
+            break;
+          } catch (error) {
+            requestDataError = error instanceof Error ? error : new Error(String(error));
+            if (i === jsonPathOptions.length - 1) {
+              // Last attempt failed
+              this.log.warn(
+                'RequestData failed with all JSONPath options, using Retrieve only:',
+                requestDataError.message
+              );
+            } else {
+              this.log.debug(`RequestData failed with JSONPath option ${i + 1}, trying next option...`);
+            }
+          }
         }
 
         // Step 2: Retrieve messages to get PropertyChange messages with zone data
         // Wait longer for the response to be available (if RequestData succeeded)
         if (!requestDataError) {
-          await new Promise((resolve) => setTimeout(resolve, 1000)); // Increased from 500ms to 1000ms
+          await new Promise((resolve) => setTimeout(resolve, 2000)); // Increased to 2 seconds to allow data messages to arrive
         }
 
         // Try retrieving messages with retry logic
+        // PropertyChange messages without Data are just notifications - we need to wait for actual data messages
+        // Python messagePump keeps retrieving until it gets messages with Data
         let messages: any[] = [];
-        const maxRetries = 2;
+        const maxRetries = 5; // More retries to catch data messages that arrive after notifications
+        let foundMessagesWithData = false;
+        
         for (let retry = 0; retry <= maxRetries; retry++) {
           try {
             if (retry > 0) {
               this.log.debug(`Retrying message retrieval (attempt ${retry + 1}/${maxRetries + 1})...`);
-              await new Promise((resolve) => setTimeout(resolve, 1000 * retry)); // Exponential backoff
+              await new Promise((resolve) => setTimeout(resolve, 2000 * retry)); // Wait longer between retries
             }
             
-            messages = await this.client.retrieveMessages({
-              longPollingTimeout: 15.0, // Longer timeout for initial discovery
+            const retrievedMessages = await this.client.retrieveMessages({
+              longPollingTimeout: 20.0, // Longer timeout to wait for data messages
               direction: 'Newest-to-Oldest', // Get most recent messages first
               messageCount: 50, // Get more messages to find zone data
               startTime: Math.floor(Date.now() / 1000) - 600, // Look back 10 minutes for initial discovery
             });
-            this.log.debug(`Retrieved ${messages.length} message(s) from thermostat`);
-            if (messages.length > 0) {
-              break; // Success, exit retry loop
+            
+            this.log.debug(`Retrieved ${retrievedMessages.length} message(s) from thermostat (attempt ${retry + 1})`);
+            
+            // Check if any messages have Data field
+            const messagesWithData = retrievedMessages.filter((msg: any) => 
+              msg && msg.Data && (msg.Data.zones || msg.Data.user_data)
+            );
+            
+            if (messagesWithData.length > 0) {
+              this.log.debug(`Found ${messagesWithData.length} message(s) with Data field`);
+              messages = retrievedMessages;
+              foundMessagesWithData = true;
+              break; // Found messages with data, exit retry loop
+            }
+            
+            // Merge with previous messages (keep all messages)
+            messages = [...messages, ...retrievedMessages];
+            
+            // Log full message structure for debugging (first time only)
+            if (retry === 0 && retrievedMessages.length > 0) {
+              this.log.debug(`First message structure: ${JSON.stringify(retrievedMessages[0], null, 2).substring(0, 2000)}`);
+            }
+            
+            // If we got messages but none have Data, continue retrying
+            if (retrievedMessages.length > 0) {
+              this.log.debug(`Retrieved ${retrievedMessages.length} message(s) but none have Data field, will retry...`);
             }
           } catch (error) {
             if (retry === maxRetries) {
@@ -500,6 +547,12 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
               );
             }
           }
+        }
+        
+        if (foundMessagesWithData) {
+          this.log.debug(`Successfully retrieved messages with Data after ${messages.length > 0 ? 'finding' : 'retries'}`);
+        } else if (messages.length > 0) {
+          this.log.warn(`Retrieved ${messages.length} message(s) but none contain Data field - zone data may not be available`);
         }
 
         // Parse zone messages into substatuses
@@ -730,44 +783,56 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
 
         // Use RequestData + Retrieve pattern (matches Python lennoxs30api)
         // Step 1: RequestData publishes a request for zone data using JSONPath
-        const additionalParams = '"AdditionalParameters":{"JSONPath":"1;/zones"}';
+        // Try with comprehensive JSONPath first, then fall back to just zones
+        const jsonPathOptions = [
+          '"AdditionalParameters":{"JSONPath":"1;/zones;/equipments;/schedules"}',
+          '"AdditionalParameters":{"JSONPath":"1;/zones"}',
+        ];
 
         let requestDataError: Error | null = null;
-        try {
-          await this.client.requestData('LCC', additionalParams);
-          this.log.debug('RequestData succeeded during polling, waiting for response messages...');
-        } catch (error) {
-          // If RequestData fails, fall back to Retrieve only
-          requestDataError = error instanceof Error ? error : new Error(String(error));
-          this.log.debug(
-            'RequestData failed during polling (using Retrieve only):',
-            requestDataError.message
-          );
+        for (let i = 0; i < jsonPathOptions.length; i++) {
+          try {
+            await this.client.requestData('LCC', jsonPathOptions[i]);
+            this.log.debug(`RequestData succeeded during polling with JSONPath option ${i + 1}`);
+            requestDataError = null;
+            break;
+          } catch (error) {
+            requestDataError = error instanceof Error ? error : new Error(String(error));
+            if (i === jsonPathOptions.length - 1) {
+              // Last attempt failed
+              this.log.debug(
+                'RequestData failed during polling with all options (using Retrieve only):',
+                requestDataError.message
+              );
+            }
+          }
         }
 
         // Step 2: Retrieve messages to get PropertyChange messages with zone data
         // Wait longer for the response to be available (if RequestData succeeded)
         if (!requestDataError) {
-          await new Promise((resolve) => setTimeout(resolve, 1000)); // Increased from 500ms to 1000ms
+          await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds for data messages
         }
 
         // Try retrieving messages with retry logic
+        // PropertyChange messages without Data are just notifications - we need to wait for actual data messages
         let messages: any[] = [];
-        const maxRetries = 1; // Fewer retries during polling to avoid delays
+        const maxRetries = 2; // More retries during polling to catch data messages
         for (let retry = 0; retry <= maxRetries; retry++) {
           try {
             if (retry > 0) {
               this.log.debug(`Retrying message retrieval during polling (attempt ${retry + 1}/${maxRetries + 1})...`);
-              await new Promise((resolve) => setTimeout(resolve, 500 * retry));
+              await new Promise((resolve) => setTimeout(resolve, 1500 * retry)); // Wait longer between retries
             }
             
             messages = await this.client.retrieveMessages({
-              longPollingTimeout: 10.0, // Standard timeout for polling
+              longPollingTimeout: 15.0, // Longer timeout to wait for data messages
               direction: 'Newest-to-Oldest', // Get most recent messages first
               messageCount: 50, // Get more messages to find zone data
               startTime: Math.floor(Date.now() / 1000) - 300, // Look back 5 minutes
             });
             this.log.debug(`Retrieved ${messages.length} message(s) during polling`);
+            
             if (messages.length > 0) {
               break; // Success, exit retry loop
             }
@@ -789,6 +854,11 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
 
         // Parse zone messages into substatuses
         const substatuses = this.parseRetrieveMessagesToSubstatuses(messages);
+        
+        // Log message structure for debugging if no zone data found
+        if (substatuses.length === 0 && messages.length > 0) {
+          this.log.debug(`No zone data parsed. Message structure: ${JSON.stringify(messages[0], null, 2).substring(0, 1500)}`);
+        }
 
         // Create/update system object from response data
         const system: LennoxSystem = {
