@@ -170,8 +170,67 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
                   statusValue = 'c';
                 }
 
-                // Determine display units (assume Fahrenheit if temperature > 50, else Celsius)
-                const dispUnits = status.temperature && status.temperature > 50 ? 'F' : 'C';
+                // Determine display units more reliably
+                // First check if config explicitly sets the unit
+                const configUnit = (this.config.temperatureUnit as string) || 'auto';
+                let dispUnits: 'F' | 'C';
+                
+                if (configUnit === 'F' || configUnit === 'C') {
+                  // Use explicit config setting
+                  dispUnits = configUnit;
+                  this.log.debug(`Using explicit temperature unit from config: ${dispUnits}`);
+                } else {
+                  // Auto-detect based on setpoint values
+                  // Check setpoint values: typical Fahrenheit setpoints are 60-80, Celsius are 15-30
+                  // Also check if hspC is provided and matches the expected conversion
+                  dispUnits = 'F'; // Default to Fahrenheit (most common in US)
+                  
+                  if (period.hsp !== undefined && period.hspC !== undefined) {
+                    // We have both Fahrenheit and Celsius setpoints
+                    // Check if hspC matches the expected conversion from hsp
+                    const expectedC = ((period.hsp - 32) * 5) / 9;
+                    const hspCValue = parseFloat(String(period.hspC));
+                    const diff = Math.abs(hspCValue - expectedC);
+                    
+                    // If the difference is small (< 2°C), hsp is in Fahrenheit
+                    if (diff < 2) {
+                      dispUnits = 'F';
+                      this.log.debug(`Detected Fahrenheit: hsp=${period.hsp}, hspC=${hspCValue}, expectedC=${expectedC.toFixed(1)}, diff=${diff.toFixed(1)}`);
+                    } else if (Math.abs(hspCValue - period.hsp) < 2) {
+                      // If hspC is close to hsp, hsp is already in Celsius
+                      dispUnits = 'C';
+                      this.log.debug(`Detected Celsius: hsp=${period.hsp}, hspC=${hspCValue}`);
+                    } else {
+                      // Fallback: check setpoint range
+                      if (period.hsp >= 50 && period.hsp <= 90) {
+                        dispUnits = 'F';
+                        this.log.debug(`Detected Fahrenheit by range: hsp=${period.hsp}`);
+                      } else if (period.hsp >= 10 && period.hsp <= 35) {
+                        dispUnits = 'C';
+                        this.log.debug(`Detected Celsius by range: hsp=${period.hsp}`);
+                      }
+                    }
+                  } else if (period.hsp !== undefined) {
+                    // Only hsp available - use range heuristic
+                    if (period.hsp >= 50 && period.hsp <= 90) {
+                      dispUnits = 'F';
+                      this.log.debug(`Detected Fahrenheit by range (hsp only): hsp=${period.hsp}`);
+                    } else if (period.hsp >= 10 && period.hsp <= 35) {
+                      dispUnits = 'C';
+                      this.log.debug(`Detected Celsius by range (hsp only): hsp=${period.hsp}`);
+                    }
+                  } else if (status.temperature !== undefined) {
+                    // Fallback: use temperature value heuristic
+                    // Typical room temperature: 65-75°F or 18-24°C
+                    if (status.temperature >= 50 && status.temperature <= 90) {
+                      dispUnits = 'F';
+                      this.log.debug(`Detected Fahrenheit by temperature: temp=${status.temperature}`);
+                    } else if (status.temperature >= 10 && status.temperature <= 35) {
+                      dispUnits = 'C';
+                      this.log.debug(`Detected Celsius by temperature: temp=${status.temperature}`);
+                    }
+                  }
+                }
 
                 // Construct UserData object
                 const userData: any = {
