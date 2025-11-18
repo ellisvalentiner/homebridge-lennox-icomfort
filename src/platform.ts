@@ -480,79 +480,88 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           }
         }
 
-        // Step 2: Retrieve messages to get PropertyChange messages with zone data
-        // Wait longer for the response to be available (if RequestData succeeded)
+        // Step 2: Continuous message pump (like Python messagePump)
+        // Keep retrieving messages until we find zone data or timeout
+        // Wait for the response to be available (if RequestData succeeded)
         if (!requestDataError) {
-          await new Promise((resolve) => setTimeout(resolve, 2000)); // Increased to 2 seconds to allow data messages to arrive
+          await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds for data messages to arrive
         }
 
-        // Try retrieving messages with retry logic
-        // PropertyChange messages without Data are just notifications - we need to wait for actual data messages
-        // Python messagePump keeps retrieving until it gets messages with Data
+        // Continuous message pump configuration
+        const maxAttempts = 15; // Maximum retrieve attempts for initial discovery
+        const attemptInterval = 2000; // 2 seconds between attempts
+        const longPollingTimeout = 10.0; // Long polling timeout per request
+        let foundZoneData = false;
         let messages: any[] = [];
-        const maxRetries = 5; // More retries to catch data messages that arrive after notifications
-        let foundMessagesWithData = false;
+        let lookbackStartTime = Math.floor(Date.now() / 1000) - 600; // Look back 10 minutes initially
         
-        for (let retry = 0; retry <= maxRetries; retry++) {
+        this.log.debug(`Starting continuous message pump (max ${maxAttempts} attempts)...`);
+        
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           try {
-            if (retry > 0) {
-              this.log.debug(`Retrying message retrieval (attempt ${retry + 1}/${maxRetries + 1})...`);
-              await new Promise((resolve) => setTimeout(resolve, 2000 * retry)); // Wait longer between retries
-            }
+            this.log.debug(`Message pump attempt ${attempt}/${maxAttempts}...`);
             
             const retrievedMessages = await this.client.retrieveMessages({
-              longPollingTimeout: 20.0, // Longer timeout to wait for data messages
+              longPollingTimeout: longPollingTimeout,
               direction: 'Newest-to-Oldest', // Get most recent messages first
               messageCount: 50, // Get more messages to find zone data
-              startTime: Math.floor(Date.now() / 1000) - 600, // Look back 10 minutes for initial discovery
+              startTime: lookbackStartTime,
             });
             
-            this.log.debug(`Retrieved ${retrievedMessages.length} message(s) from thermostat (attempt ${retry + 1})`);
+            this.log.debug(`Retrieved ${retrievedMessages.length} message(s) in attempt ${attempt}`);
             
-            // Check if any messages have Data field
-            const messagesWithData = retrievedMessages.filter((msg: any) => 
-              msg && msg.Data && (msg.Data.zones || msg.Data.user_data)
+            // Check for zone data in retrieved messages
+            const zoneMessages = retrievedMessages.filter((msg: any) => 
+              msg && msg.MessageType === 'PropertyChange' && msg.Data && msg.Data.zones
             );
             
-            if (messagesWithData.length > 0) {
-              this.log.debug(`Found ${messagesWithData.length} message(s) with Data field`);
+            if (zoneMessages.length > 0) {
+              this.log.info(`Found ${zoneMessages.length} message(s) with zone data after ${attempt} attempt(s)`);
               messages = retrievedMessages;
-              foundMessagesWithData = true;
-              break; // Found messages with data, exit retry loop
+              foundZoneData = true;
+              break; // Found zone data, exit loop
             }
             
-            // Merge with previous messages (keep all messages)
+            // Check what Data fields we got (for debugging)
+            const messagesWithData = retrievedMessages.filter((msg: any) => msg && msg.Data);
+            if (messagesWithData.length > 0) {
+              const dataKeys = new Set<string>();
+              messagesWithData.forEach((msg: any) => {
+                if (msg.Data) {
+                  Object.keys(msg.Data).forEach(key => dataKeys.add(key));
+                }
+              });
+              this.log.debug(`Got ${messagesWithData.length} message(s) with Data, but no zones (Data keys: ${Array.from(dataKeys).join(', ')})`);
+            }
+            
+            // Merge messages and continue
             messages = [...messages, ...retrievedMessages];
             
-            // Log full message structure for debugging (first time only)
-            if (retry === 0 && retrievedMessages.length > 0) {
-              this.log.debug(`First message structure: ${JSON.stringify(retrievedMessages[0], null, 2).substring(0, 2000)}`);
-            }
+            // Update lookback time to current time for next attempt (get new messages)
+            lookbackStartTime = Math.floor(Date.now() / 1000);
             
-            // If we got messages but none have Data, continue retrying
-            if (retrievedMessages.length > 0) {
-              this.log.debug(`Retrieved ${retrievedMessages.length} message(s) but none have Data field, will retry...`);
+            // Wait before next attempt (unless we found zone data)
+            if (!foundZoneData && attempt < maxAttempts) {
+              await new Promise((resolve) => setTimeout(resolve, attemptInterval));
             }
           } catch (error) {
-            if (retry === maxRetries) {
-              this.log.error(
-                'Failed to retrieve messages after retries:',
-                error instanceof Error ? error.message : String(error)
-              );
-              // Don't return - use cached data if available
-            } else {
-              this.log.debug(
-                `Retrieve attempt ${retry + 1} failed, will retry:`,
-                error instanceof Error ? error.message : String(error)
-              );
+            this.log.debug(
+              `Message pump attempt ${attempt} failed:`,
+              error instanceof Error ? error.message : String(error)
+            );
+            // Continue to next attempt
+            if (attempt < maxAttempts) {
+              await new Promise((resolve) => setTimeout(resolve, attemptInterval));
             }
           }
         }
         
-        if (foundMessagesWithData) {
-          this.log.debug(`Successfully retrieved messages with Data after ${messages.length > 0 ? 'finding' : 'retries'}`);
+        if (foundZoneData) {
+          this.log.info(`Successfully retrieved zone data after ${messages.length > 0 ? 'finding' : 'retries'}`);
         } else if (messages.length > 0) {
-          this.log.warn(`Retrieved ${messages.length} message(s) but none contain Data field - zone data may not be available`);
+          this.log.warn(`Retrieved ${messages.length} message(s) but none contain zone data - zone data may only be sent on state changes`);
+        } else {
+          this.log.warn('No messages retrieved - zone data may not be available');
         }
 
         // Parse zone messages into substatuses
@@ -808,48 +817,68 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
           }
         }
 
-        // Step 2: Retrieve messages to get PropertyChange messages with zone data
-        // Wait longer for the response to be available (if RequestData succeeded)
+        // Step 2: Continuous message pump (like Python messagePump)
+        // For polling, use fewer attempts but still check for zone data
+        // Wait for the response to be available (if RequestData succeeded)
         if (!requestDataError) {
           await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds for data messages
         }
 
-        // Try retrieving messages with retry logic
-        // PropertyChange messages without Data are just notifications - we need to wait for actual data messages
+        // Continuous message pump for polling (fewer attempts than discovery)
+        const maxAttempts = 5; // Fewer attempts during polling to avoid delays
+        const attemptInterval = 1500; // 1.5 seconds between attempts
+        const longPollingTimeout = 10.0; // Long polling timeout per request
+        let foundZoneData = false;
         let messages: any[] = [];
-        const maxRetries = 2; // More retries during polling to catch data messages
-        for (let retry = 0; retry <= maxRetries; retry++) {
+        let lookbackStartTime = Math.floor(Date.now() / 1000) - 300; // Look back 5 minutes initially
+        
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           try {
-            if (retry > 0) {
-              this.log.debug(`Retrying message retrieval during polling (attempt ${retry + 1}/${maxRetries + 1})...`);
-              await new Promise((resolve) => setTimeout(resolve, 1500 * retry)); // Wait longer between retries
-            }
-            
-            messages = await this.client.retrieveMessages({
-              longPollingTimeout: 15.0, // Longer timeout to wait for data messages
+            const retrievedMessages = await this.client.retrieveMessages({
+              longPollingTimeout: longPollingTimeout,
               direction: 'Newest-to-Oldest', // Get most recent messages first
               messageCount: 50, // Get more messages to find zone data
-              startTime: Math.floor(Date.now() / 1000) - 300, // Look back 5 minutes
+              startTime: lookbackStartTime,
             });
-            this.log.debug(`Retrieved ${messages.length} message(s) during polling`);
             
-            if (messages.length > 0) {
-              break; // Success, exit retry loop
+            this.log.debug(`Retrieved ${retrievedMessages.length} message(s) during polling (attempt ${attempt})`);
+            
+            // Check for zone data in retrieved messages
+            const zoneMessages = retrievedMessages.filter((msg: any) => 
+              msg && msg.MessageType === 'PropertyChange' && msg.Data && msg.Data.zones
+            );
+            
+            if (zoneMessages.length > 0) {
+              this.log.debug(`Found ${zoneMessages.length} message(s) with zone data during polling`);
+              messages = retrievedMessages;
+              foundZoneData = true;
+              break; // Found zone data, exit loop
+            }
+            
+            // Merge messages and continue
+            messages = [...messages, ...retrievedMessages];
+            
+            // Update lookback time to current time for next attempt (get new messages)
+            lookbackStartTime = Math.floor(Date.now() / 1000);
+            
+            // Wait before next attempt (unless we found zone data)
+            if (!foundZoneData && attempt < maxAttempts) {
+              await new Promise((resolve) => setTimeout(resolve, attemptInterval));
             }
           } catch (error) {
-            if (retry === maxRetries) {
-              this.log.debug(
-                'Failed to retrieve messages during polling after retries:',
-                error instanceof Error ? error.message : String(error)
-              );
-              // Don't return - use cached data if available
-            } else {
-              this.log.debug(
-                `Retrieve attempt ${retry + 1} failed during polling, will retry:`,
-                error instanceof Error ? error.message : String(error)
-              );
+            this.log.debug(
+              `Message pump attempt ${attempt} failed during polling:`,
+              error instanceof Error ? error.message : String(error)
+            );
+            // Continue to next attempt
+            if (attempt < maxAttempts) {
+              await new Promise((resolve) => setTimeout(resolve, attemptInterval));
             }
           }
+        }
+        
+        if (foundZoneData) {
+          this.log.debug(`Successfully retrieved zone data during polling`);
         }
 
         // Parse zone messages into substatuses
