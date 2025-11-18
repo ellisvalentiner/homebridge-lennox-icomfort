@@ -48,7 +48,7 @@
     "@types/uuid": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
-    "eslint": "^8.54.0",
+    "eslint": "^9.39.1",
     "homebridge": "^2.0.0-beta.0",
     "husky": "^9.0.0",
     "lint-staged": "^15.2.0",
