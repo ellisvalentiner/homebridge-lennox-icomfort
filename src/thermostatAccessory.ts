@@ -143,7 +143,9 @@ export class LennoxiComfortAccessory {
     try {
       const zoneData = this.platform.getPrimaryZoneData(system);
       if (!zoneData) {
-        this.platform.log.warn(`No zone data found for system ${system.extId}`);
+        // Only log warning if we've never had zone data (avoid spamming logs)
+        // During normal operation, missing zone data is handled by caching
+        this.platform.log.debug(`No zone data found for system ${system.extId} (may be using cached data)`);
         return;
       }
 

@@ -32,6 +32,7 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
   private storagePath: string;
   private accessoryHandlers: Map<string, LennoxiComfortAccessory> = new Map();
   public readonly isLocalConnection: boolean; // Track connection mode
+  private cachedZoneData: Map<string, LennoxSystem> = new Map(); // Cache last known zone data by system ID
 
   constructor(
     public readonly log: Logger,
@@ -117,6 +118,7 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
   /**
    * Parse zone messages from Retrieve endpoint into substatuses
    * Handles PropertyChange messages with Data.zones containing status/period
+   * Also handles zones with user_data directly
    */
   private parseRetrieveMessagesToSubstatuses(messages: any[]): SubStatus[] {
     const substatuses: SubStatus[] = [];
@@ -127,24 +129,79 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
     }
 
     this.log.debug(`parseRetrieveMessagesToSubstatuses: Processing ${messages.length} message(s)`);
+    
+    // Log message types for debugging
+    const messageTypes = messages.map(m => m?.MessageType || 'unknown').filter((v, i, a) => a.indexOf(v) === i);
+    this.log.debug(`parseRetrieveMessagesToSubstatuses: Message types found: ${messageTypes.join(', ')}`);
 
     // Check if messages are nested under a 'messages' key
     let messagesToParse = messages;
     if (messages.length === 1 && messages[0].messages && Array.isArray(messages[0].messages)) {
-      this.log.debug('parseRetrieveMessagesToSubstatuses: Detected nested messages structure');
+      this.log.debug(`parseRetrieveMessagesToSubstatuses: Detected nested messages structure with ${messages[0].messages.length} nested message(s)`);
       messagesToParse = messages[0].messages;
     }
 
     // Process each message to find zone data
-    for (const message of messagesToParse) {
-      if (!message || typeof message !== 'object') continue;
+    for (let i = 0; i < messagesToParse.length; i++) {
+      const message = messagesToParse[i];
+      if (!message || typeof message !== 'object') {
+        this.log.debug(`parseRetrieveMessagesToSubstatuses: Skipping invalid message at index ${i}`);
+        continue;
+      }
+
+      const messageType = message.MessageType || 'unknown';
+      this.log.debug(`parseRetrieveMessagesToSubstatuses: Processing message ${i + 1}/${messagesToParse.length}, type: ${messageType}`);
 
       // Look for PropertyChange messages with Data.zones
       if (message.MessageType === 'PropertyChange' && message.Data && message.Data.zones) {
         const zones = message.Data.zones;
+        this.log.debug(`parseRetrieveMessagesToSubstatuses: Found PropertyChange message with ${Array.isArray(zones) ? zones.length : 0} zone(s)`);
+        
         if (Array.isArray(zones)) {
-          for (const zone of zones) {
-            if (!zone || typeof zone !== 'object') continue;
+          for (let j = 0; j < zones.length; j++) {
+            const zone = zones[j];
+            if (!zone || typeof zone !== 'object') {
+              this.log.debug(`parseRetrieveMessagesToSubstatuses: Skipping invalid zone at index ${j}`);
+              continue;
+            }
+
+            const zoneId = zone.id !== undefined ? String(zone.id) : '0';
+            this.log.debug(`parseRetrieveMessagesToSubstatuses: Processing zone ${j + 1}/${zones.length}, zone ID: ${zoneId}`);
+            this.log.debug(`parseRetrieveMessagesToSubstatuses: Zone keys: ${Object.keys(zone).join(', ')}`);
+
+            // Check for zone with user_data directly (alternative structure)
+            if (zone.user_data) {
+              try {
+                this.log.debug(`parseRetrieveMessagesToSubstatuses: Found zone with user_data directly`);
+                const userDataString = typeof zone.user_data === 'string' ? zone.user_data : JSON.stringify(zone.user_data);
+                const userData = JSON.parse(userDataString) as UserData;
+                
+                const now = Date.now();
+                const nowSeconds = Math.floor(now / 1000);
+                const nowNanos = (now % 1000) * 1000000;
+
+                substatuses.push({
+                  relay_id: zoneId,
+                  guid: zoneId,
+                  dds_guid: zoneId,
+                  active: true,
+                  active_ts: {
+                    sec: nowSeconds,
+                    nanosec: nowNanos,
+                  },
+                  alive: true,
+                  alive_ts: {
+                    sec: nowSeconds,
+                    nanosec: nowNanos,
+                  },
+                  user_data: userDataString,
+                });
+                this.log.debug(`parseRetrieveMessagesToSubstatuses: Created substatus from user_data for zone ${zoneId}`);
+                continue; // Skip status.period processing for this zone
+              } catch (error) {
+                this.log.debug(`parseRetrieveMessagesToSubstatuses: Failed to parse user_data for zone ${zoneId}:`, error);
+              }
+            }
 
             // Zone has status.period structure - convert to UserData
             if (zone.status && zone.status.period) {
@@ -301,15 +358,27 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
                 });
                 this.log.debug(`parseRetrieveMessagesToSubstatuses: Created substatus for zone ${zoneId}`);
               } catch (error) {
-                this.log.debug('parseRetrieveMessagesToSubstatuses: Failed to construct UserData from status/period:', error);
+                this.log.debug(`parseRetrieveMessagesToSubstatuses: Failed to construct UserData from status/period for zone ${zoneId}:`, error);
               }
+            } else {
+              this.log.debug(`parseRetrieveMessagesToSubstatuses: Zone ${zoneId} does not have status.period or user_data structure`);
             }
           }
+        }
+      } else {
+        // Check for other message types that might contain zone data
+        if (message.Data && message.Data.zones) {
+          this.log.debug(`parseRetrieveMessagesToSubstatuses: Found message type ${messageType} with Data.zones, but not PropertyChange`);
+        } else if (message.Data) {
+          this.log.debug(`parseRetrieveMessagesToSubstatuses: Message type ${messageType} has Data but no zones, Data keys: ${Object.keys(message.Data).join(', ')}`);
         }
       }
     }
 
     this.log.debug(`parseRetrieveMessagesToSubstatuses: Returning ${substatuses.length} substatus(es)`);
+    if (substatuses.length === 0) {
+      this.log.debug(`parseRetrieveMessagesToSubstatuses: No zone data extracted. Message structure sample: ${JSON.stringify(messagesToParse[0] || {}).substring(0, 500)}`);
+    }
     return substatuses;
   }
 
@@ -391,26 +460,45 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
         }
 
         // Step 2: Retrieve messages to get PropertyChange messages with zone data
-        // Wait a brief moment for the response to be available (if RequestData succeeded)
+        // Wait longer for the response to be available (if RequestData succeeded)
         if (!requestDataError) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, 1000)); // Increased from 500ms to 1000ms
         }
 
-        let messages: any[];
-        try {
-          messages = await this.client.retrieveMessages({
-            longPollingTimeout: 10.0, // Longer timeout to wait for messages
-            direction: 'Newest-to-Oldest', // Get most recent messages first
-            messageCount: 50, // Get more messages to find zone data
-            startTime: Math.floor(Date.now() / 1000) - 300, // Look back 5 minutes
-          });
-          this.log.debug(`Retrieved ${messages.length} message(s) from thermostat`);
-        } catch (error) {
-          this.log.error(
-            'Failed to retrieve messages:',
-            error instanceof Error ? error.message : String(error)
-          );
-          return;
+        // Try retrieving messages with retry logic
+        let messages: any[] = [];
+        const maxRetries = 2;
+        for (let retry = 0; retry <= maxRetries; retry++) {
+          try {
+            if (retry > 0) {
+              this.log.debug(`Retrying message retrieval (attempt ${retry + 1}/${maxRetries + 1})...`);
+              await new Promise((resolve) => setTimeout(resolve, 1000 * retry)); // Exponential backoff
+            }
+            
+            messages = await this.client.retrieveMessages({
+              longPollingTimeout: 15.0, // Longer timeout for initial discovery
+              direction: 'Newest-to-Oldest', // Get most recent messages first
+              messageCount: 50, // Get more messages to find zone data
+              startTime: Math.floor(Date.now() / 1000) - 600, // Look back 10 minutes for initial discovery
+            });
+            this.log.debug(`Retrieved ${messages.length} message(s) from thermostat`);
+            if (messages.length > 0) {
+              break; // Success, exit retry loop
+            }
+          } catch (error) {
+            if (retry === maxRetries) {
+              this.log.error(
+                'Failed to retrieve messages after retries:',
+                error instanceof Error ? error.message : String(error)
+              );
+              // Don't return - use cached data if available
+            } else {
+              this.log.debug(
+                `Retrieve attempt ${retry + 1} failed, will retry:`,
+                error instanceof Error ? error.message : String(error)
+              );
+            }
+          }
         }
 
         // Parse zone messages into substatuses
@@ -434,8 +522,17 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
 
         if (substatuses.length > 0) {
           this.log.info(`Parsed ${substatuses.length} zone(s) from Retrieve messages`);
+          // Cache the successful zone data
+          this.cachedZoneData.set('LCC', system);
         } else {
-          this.log.warn('No zone data found in Retrieve messages - will retry during polling');
+          // Use cached data if available
+          const cachedSystem = this.cachedZoneData.get('LCC');
+          if (cachedSystem) {
+            this.log.debug('No zone data in messages, using cached zone data');
+            Object.assign(system, cachedSystem);
+          } else {
+            this.log.debug('No zone data found in Retrieve messages and no cache available - will retry during polling');
+          }
         }
 
         this.log.info('Found local system: LCC');
@@ -648,26 +745,45 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
         }
 
         // Step 2: Retrieve messages to get PropertyChange messages with zone data
-        // Wait a brief moment for the response to be available (if RequestData succeeded)
+        // Wait longer for the response to be available (if RequestData succeeded)
         if (!requestDataError) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, 1000)); // Increased from 500ms to 1000ms
         }
 
-        let messages: any[];
-        try {
-          messages = await this.client.retrieveMessages({
-            longPollingTimeout: 10.0, // Longer timeout to wait for messages
-            direction: 'Newest-to-Oldest', // Get most recent messages first
-            messageCount: 50, // Get more messages to find zone data
-            startTime: Math.floor(Date.now() / 1000) - 300, // Look back 5 minutes
-          });
-          this.log.debug(`Retrieved ${messages.length} message(s) during polling`);
-        } catch (error) {
-          this.log.error(
-            'Failed to retrieve messages during polling:',
-            error instanceof Error ? error.message : String(error)
-          );
-          return;
+        // Try retrieving messages with retry logic
+        let messages: any[] = [];
+        const maxRetries = 1; // Fewer retries during polling to avoid delays
+        for (let retry = 0; retry <= maxRetries; retry++) {
+          try {
+            if (retry > 0) {
+              this.log.debug(`Retrying message retrieval during polling (attempt ${retry + 1}/${maxRetries + 1})...`);
+              await new Promise((resolve) => setTimeout(resolve, 500 * retry));
+            }
+            
+            messages = await this.client.retrieveMessages({
+              longPollingTimeout: 10.0, // Standard timeout for polling
+              direction: 'Newest-to-Oldest', // Get most recent messages first
+              messageCount: 50, // Get more messages to find zone data
+              startTime: Math.floor(Date.now() / 1000) - 300, // Look back 5 minutes
+            });
+            this.log.debug(`Retrieved ${messages.length} message(s) during polling`);
+            if (messages.length > 0) {
+              break; // Success, exit retry loop
+            }
+          } catch (error) {
+            if (retry === maxRetries) {
+              this.log.debug(
+                'Failed to retrieve messages during polling after retries:',
+                error instanceof Error ? error.message : String(error)
+              );
+              // Don't return - use cached data if available
+            } else {
+              this.log.debug(
+                `Retrieve attempt ${retry + 1} failed during polling, will retry:`,
+                error instanceof Error ? error.message : String(error)
+              );
+            }
+          }
         }
 
         // Parse zone messages into substatuses
@@ -690,8 +806,18 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
 
         if (substatuses.length > 0) {
           this.log.debug(`Parsed ${substatuses.length} zone(s) from Retrieve polling messages`);
+          // Cache the successful zone data
+          this.cachedZoneData.set('LCC', system);
         } else {
-          this.log.warn('No zone data found in Retrieve polling messages');
+          // Use cached data if available
+          const cachedSystem = this.cachedZoneData.get('LCC');
+          if (cachedSystem) {
+            this.log.debug('No zone data in polling messages, using cached zone data');
+            Object.assign(system, cachedSystem);
+          } else {
+            // Only log warning if we've never had zone data (first few polls might not have data)
+            this.log.debug('No zone data found in Retrieve polling messages and no cache available');
+          }
         }
 
         // Update accessory with system data
@@ -777,33 +903,59 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
 
   /**
    * Get primary zone data from system
+   * Uses cached data as fallback if current system has no zone data
    */
   getPrimaryZoneData(system: LennoxSystem): { userData: UserData; subStatus: SubStatus } | null {
-    if (!system.status || !system.status.substatuses || system.status.substatuses.length === 0) {
-      return null;
+    // Try to get zone data from current system
+    if (system.status && system.status.substatuses && system.status.substatuses.length > 0) {
+      // Find active/alive substatus first
+      let subStatus = system.status.substatuses.find((s) => s.active && s.alive);
+
+      // Fallback to first substatus if no active one found
+      if (!subStatus) {
+        subStatus = system.status.substatuses[0];
+      }
+
+      if (subStatus && subStatus.user_data) {
+        try {
+          const userData = JSON.parse(subStatus.user_data) as UserData;
+          return { userData, subStatus };
+        } catch (error) {
+          this.log.debug(
+            'Error parsing user_data from current system:',
+            error instanceof Error ? error.message : String(error)
+          );
+          // Fall through to cached data
+        }
+      }
     }
 
-    // Find active/alive substatus first
-    let subStatus = system.status.substatuses.find((s) => s.active && s.alive);
+    // Fallback to cached data if current system has no zone data
+    const cachedSystem = this.cachedZoneData.get(system.extId);
+    if (cachedSystem && cachedSystem.status && cachedSystem.status.substatuses && cachedSystem.status.substatuses.length > 0) {
+      this.log.debug(`Using cached zone data for system ${system.extId}`);
+      
+      // Find active/alive substatus first
+      let subStatus = cachedSystem.status.substatuses.find((s) => s.active && s.alive);
 
-    // Fallback to first substatus if no active one found
-    if (!subStatus) {
-      subStatus = system.status.substatuses[0];
+      // Fallback to first substatus if no active one found
+      if (!subStatus) {
+        subStatus = cachedSystem.status.substatuses[0];
+      }
+
+      if (subStatus && subStatus.user_data) {
+        try {
+          const userData = JSON.parse(subStatus.user_data) as UserData;
+          return { userData, subStatus };
+        } catch (error) {
+          this.log.debug(
+            'Error parsing user_data from cached system:',
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      }
     }
 
-    if (!subStatus || !subStatus.user_data) {
-      return null;
-    }
-
-    try {
-      const userData = JSON.parse(subStatus.user_data) as UserData;
-      return { userData, subStatus };
-    } catch (error) {
-      this.log.error(
-        'Error parsing user_data:',
-        error instanceof Error ? error.message : String(error)
-      );
-      return null;
-    }
+    return null;
   }
 }
