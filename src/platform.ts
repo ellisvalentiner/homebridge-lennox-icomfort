@@ -174,7 +174,8 @@ export class LennoxiComfortPlatform implements DynamicPlatformPlugin {
               try {
                 this.log.debug(`parseRetrieveMessagesToSubstatuses: Found zone with user_data directly`);
                 const userDataString = typeof zone.user_data === 'string' ? zone.user_data : JSON.stringify(zone.user_data);
-                const userData = JSON.parse(userDataString) as UserData;
+                // Validate that user_data is valid JSON
+                JSON.parse(userDataString) as UserData;
                 
                 const now = Date.now();
                 const nowSeconds = Math.floor(now / 1000);
